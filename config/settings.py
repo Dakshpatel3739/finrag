@@ -54,15 +54,26 @@ class Settings(BaseSettings):
         default="https://integrate.api.nvidia.com/v1",
         description="Base URL for the NeMo Retriever Embedding NIM",
     )
+    # WHY different base URL for reranking: the hosted NeMo Retriever Reranking NIM
+    # lives at ai.api.nvidia.com/v1/retrieval/nvidia, not integrate.api.nvidia.com/v1.
+    # The reranker appends /reranking to this base.
+    # For self-hosted Phase 5 NIMs, override to http://nim-rerank:8000/v1/retrieval/nvidia.
     nim_rerank_base_url: str = Field(
-        default="https://integrate.api.nvidia.com/v1",
+        default="https://ai.api.nvidia.com/v1/retrieval/nvidia",
         description="Base URL for the NeMo Retriever Reranking NIM",
     )
 
     # Model identifiers (passed as the `model` parameter to the NIM endpoint)
     nim_llm_model: str = Field(default="meta/llama-3.1-8b-instruct")
     nim_embed_model: str = Field(default="nvidia/nv-embedqa-e5-v5")
-    nim_rerank_model: str = Field(default="nvidia/nv-rerankqa-mistral-4b-v3")
+    nim_rerank_model: str = Field(default="nvidia/rerank-qa-mistral-4b")
+
+    # ── Runtime config DB ──────────────────────────────────────────────────
+    # SQLite file used by system_config for tunable retrieval params (top_k, etc.)
+    config_db_path: str = Field(
+        default="finrag_config.db",
+        description="Path to the SQLite DB for system_config (top_k, rerank_n, rrf_k …)",
+    )
 
     # ── Milvus ─────────────────────────────────────────────────────────────
     # In dev use Milvus Lite — point MILVUS_URI at a local .db file path.
