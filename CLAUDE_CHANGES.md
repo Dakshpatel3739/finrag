@@ -12,6 +12,15 @@
 
 ## CHANGELOG
 
+### [2026-06-12] Phase 1 slice 5 — generation + citation enforcement (Phase 1 COMPLETE)
+- **What:** `GenerationError` exception; async `generate()` LLM NIM client (OpenAI-compatible chat/completions, temperature=0.1, retry on 429/5xx, nim_cost_log hook); `build_rag_prompt(query, chunks)` assembling numbered [N]-labeled context block + grounding+citation system prompt; `parse_citations(answer, chunks)` post-generation enforcement (reject hallucinated indices, warn on uncited positive answers, no warning on refusal); `AnswerWithCitations` + `CitationSource` pydantic v2 models; `answer_query` Phase 1 end-to-end entrypoint (document_search → build_rag_prompt → generate → parse_citations, filter_expr threaded through for Phase 2 RBAC); 32 tests (all non-slow) + 1 @pytest.mark.slow live test; ADR-006.
+- **Why:** complete the Phase 1 loop — upload 10-K → ask question → cited answer. `answer_query` is the single call-site for Phase 2 and beyond.
+- **RBAC hook:** `filter_expr: str | None = None` on `answer_query` threads unchanged to `document_search` → Milvus ANN search. Phase 2 injects `'org_id == "..." AND ARRAY_CONTAINS(allowed_roles, "...")'` here; forbidden chunks never enter the RAG prompt or citations.
+- **Citation enforcement:** [N] numeric markers in the prompt; post-generation regex parse; hallucinated indices (N > len(chunks)) silently rejected; no-citation positive answers emit `citations.no_grounding` structlog warning; refusal phrase ("I cannot answer…") suppresses the warning. Uses `structlog.testing.capture_logs()` in tests (structlog writes to stdout, not Python logging).
+- **Live test result:** `NVIDIA's total revenue for fiscal year 2024 was $26.97 billion [1].` → `live_nvidia_10k.pdf, page 0 (chunk_id=e2c75bfcaf97769d)`. Prompt tokens: 301, completion tokens: 21, total latency: 1.77s.
+- **Files:** generation/errors.py, generation/llm_client.py, generation/prompt.py, generation/citations.py, generation/answer.py, generation/conftest.py, generation/test_prompt.py, generation/test_citations.py, generation/test_answer.py, docs/adr/ADR-006*, CLAUDE_CHANGES.md.
+- **Test result:** 148 passed, 7 deselected (slow), 3 warnings.
+
 ### [2026-06-12] Phase 1 slice 4 — hybrid retrieval + reranking
 - **What:** `dense_search` on MilvusStore (with `filter_expr` RBAC injection point), in-memory `BM25Index` (rank-bm25, whitespace tokenisation), `rrf_fuse` (Reciprocal Rank Fusion, k from system_config), async `rerank` NIM client (nv-rerankqa-mistral-4b-v3, env-driven URL/model, retry on 429/5xx), `document_search` orchestrator (embed→dense→bm25→rrf→rerank), `RerankError`, `config_db_path` setting, ADR-005. 53 new tests (all non-slow).
 - **Why:** turn a query string into a ranked list of relevant chunks for the generation step; set up the Phase 2 RBAC hook at the exact Milvus search boundary.
@@ -94,6 +103,14 @@
 - **Root cause:** Fixture uses `yield` making it a generator function; annotated as `-> Path` instead of `-> Generator[Path, None, None]`.
 - **Fix:** added `from collections.abc import Generator` and changed return type to `Generator[Path, None, None]`.
 - **Fallback / prevention:** any yield-based pytest fixture must use `Generator[YieldType, None, None]` (or `Iterator[YieldType]`) as the return annotation under `--strict`.
+- **Status:** Resolved.
+
+### [2026-06-12] Phase 1 slice 5 — structlog warning tests used Python logging caplog
+- **Symptom:** `test_no_citation_answer_triggers_warning` and `test_hallucinated_citation_triggers_warning` failed with empty `caplog.text` despite structlog clearly emitting `[warning]` lines to stdout.
+- **Where:** generation/test_citations.py.
+- **Root cause:** pytest's `caplog` fixture captures messages routed through Python's standard `logging` module. structlog by default uses its own renderer pipeline that writes directly to stdout (via `PrintLoggerFactory`), bypassing the Python logging system entirely.
+- **Fix:** replaced `caplog.at_level(logging.WARNING)` with `structlog.testing.capture_logs()` context manager, which intercepts structlog events at the processor level and returns them as a list of dicts. Assertions now check `e["event"]` keys.
+- **Fallback / prevention:** any test that asserts structlog emitted a warning or error must use `structlog.testing.capture_logs()`, not `caplog`. Python `caplog` only works when structlog is explicitly configured to route through `logging.Logger` (e.g., via `structlog.stdlib.add_log_level` + `structlog.stdlib.PositionalArgumentsFormatter` pipeline). The default structlog configuration does not do this.
 - **Status:** Resolved.
 
 ### [TEMPLATE — copy for each incident]
