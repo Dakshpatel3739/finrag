@@ -96,7 +96,7 @@ without redeploy.
 
 `rerank(query, chunks, top_n) -> list[Chunk]`
 
-The reranker calls `{NIM_RERANK_BASE_URL}/ranking` with:
+The reranker calls `{NIM_RERANK_BASE_URL}/reranking` with:
 ```json
 {"model": "<NIM_RERANK_MODEL>",
  "query": {"text": "<query>"},

@@ -52,7 +52,7 @@ _FAKE_RANKINGS = [
 def _rerank_url() -> str:
     from config.settings import get_settings
 
-    return f"{get_settings().nim_rerank_base_url}/ranking"
+    return f"{get_settings().nim_rerank_base_url}/reranking"
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +102,7 @@ async def test_rerank_uses_env_driven_url() -> None:
     from config.settings import get_settings
 
     settings = get_settings()
-    expected_url = f"{settings.nim_rerank_base_url}/ranking"
+    expected_url = f"{settings.nim_rerank_base_url}/reranking"
 
     route = respx.post(expected_url).mock(
         return_value=Response(200, json={"rankings": _FAKE_RANKINGS})

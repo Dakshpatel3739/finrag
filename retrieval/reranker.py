@@ -14,7 +14,7 @@ WHY a separate reranking step (not just dense retrieval):
     expensive cross-encoder reranks the shortlist (rerank_n) → best of both worlds.
 
 NIM endpoint contract (NeMo Retriever Reranking):
-    POST {NIM_RERANK_BASE_URL}/ranking
+    POST {NIM_RERANK_BASE_URL}/reranking
     Body:
         {"model": "<model>",
          "query": {"text": "<query_text>"},
@@ -108,7 +108,7 @@ async def rerank(
     base_url = settings.nim_rerank_base_url
     model = settings.nim_rerank_model
 
-    url = f"{base_url}/ranking"
+    url = f"{base_url}/reranking"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",

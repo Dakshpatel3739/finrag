@@ -72,6 +72,14 @@
 - **Fallback / prevention:** any BM25 wrapper over rank-bm25 must guard the empty-corpus case. Added `test_empty_corpus_builds_valid_index` to the suite.
 - **Status:** Resolved.
 
+### [2026-06-12] Phase 1 slice 4 — rerank NIM wrong URL and model name
+- **Symptom:** Live reranker test returned 404 from all attempted endpoints.
+- **Where:** retrieval/reranker.py, config/settings.py, .env.
+- **Root cause:** NVIDIA's hosted reranking NIM uses `ai.api.nvidia.com/v1/retrieval/nvidia/reranking` (not `integrate.api.nvidia.com/v1/ranking`). The model name on the hosted API is `nvidia/rerank-qa-mistral-4b` (not `nvidia/nv-rerankqa-mistral-4b-v3`). The `.env` and settings defaults carried over the wrong values from the embedding NIM.
+- **Fix:** Updated `nim_rerank_base_url` default to `https://ai.api.nvidia.com/v1/retrieval/nvidia`, updated `nim_rerank_model` default to `nvidia/rerank-qa-mistral-4b`, changed reranker to append `/reranking` (not `/ranking`), updated `.env`, ADR-005, and test helper.
+- **Fallback / prevention:** Self-hosted Phase 5 NIMs expose the endpoint at `http://nim-rerank-service:8000/v1/retrieval/nvidia` — the path structure is identical, only the host changes. Override `NIM_RERANK_BASE_URL` via env var for self-hosted deployments.
+- **Status:** Resolved. Live test: `nvidia/rerank-qa-mistral-4b` correctly ranked revenue chunks above an unrelated chunk (logits: -2.5, -6.0, -15.2).
+
 ### [2026-06-12] Phase 1 slice 4 — test_filter_expr incorrectly asserted BM25 is filtered
 - **Symptom:** `test_filter_expr_threads_to_dense_search` failed because `chunk_other` appeared in rerank candidates despite `filter_expr='org_id == "acme"'`.
 - **Where:** retrieval/test_search.py.
