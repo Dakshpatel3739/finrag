@@ -64,6 +64,13 @@ class Settings(BaseSettings):
     nim_embed_model: str = Field(default="nvidia/nv-embedqa-e5-v5")
     nim_rerank_model: str = Field(default="nvidia/nv-rerankqa-mistral-4b-v3")
 
+    # ── Runtime config DB ──────────────────────────────────────────────────
+    # SQLite file used by system_config for tunable retrieval params (top_k, etc.)
+    config_db_path: str = Field(
+        default="finrag_config.db",
+        description="Path to the SQLite DB for system_config (top_k, rerank_n, rrf_k …)",
+    )
+
     # ── Milvus ─────────────────────────────────────────────────────────────
     # In dev use Milvus Lite — point MILVUS_URI at a local .db file path.
     # In production point at your Milvus server: http://milvus-service:19530
