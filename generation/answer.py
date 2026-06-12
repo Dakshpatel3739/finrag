@@ -1,28 +1,26 @@
 """
-generation.answer — answer_query: the Phase 1 RAG end-to-end entrypoint.
+generation.answer — answer_query: the end-to-end RAG entrypoint.
 
-This module is the chain-server's ``generate`` method for Phase 1.  It wires
-together the four Phase 1 subsystems into a single coroutine:
+This module is the chain-server's ``generate`` method.  It wires together:
 
     document_search  →  build_rag_prompt  →  llm_client.generate  →  parse_citations
 
-The result is an AnswerWithCitations — a structured object carrying the LLM's
-response text and a list of verified citation sources (doc_name + page_number +
-chunk_id drawn from the retrieved chunks).
+The result is an AnswerWithCitations — carrying the LLM's response text and
+verified citation sources (doc_name + page_number + chunk_id).
 
-Phase 2 RBAC extension point
------------------------------
-``filter_expr`` is passed unchanged to ``document_search``, which threads it
-into the Milvus ANN search.  Phase 2 constructs:
+RBAC enforcement:
+    answer_query accepts (org_id, role) and passes them to document_search,
+    which builds the Milvus filter and BM25 post-filter from them.  Forbidden
+    chunks are excluded at the Milvus storage layer before any Python code sees
+    them — they can never enter the RAG prompt or appear in citations.
 
-    'org_id == "{org_id}" AND ARRAY_CONTAINS(allowed_roles, "{role}")'
-
-and passes it here.  Forbidden chunks are excluded at the Milvus search level
-and therefore never enter the RAG prompt or appear in citations.
+    The filter_expr escape hatch is retained for admin/eval paths.  If org_id
+    + role are provided, they take precedence over filter_expr.
 
 Public API
 ----------
-    answer_query(query, store, bm25_index, filter_expr) -> AnswerWithCitations
+    answer_query(query, store, bm25_index, org_id, role, filter_expr)
+        -> AnswerWithCitations
 """
 
 from __future__ import annotations
@@ -35,6 +33,7 @@ from generation.citations import AnswerWithCitations, parse_citations
 from generation.llm_client import generate
 from generation.prompt import build_rag_prompt
 from ingest.models import Chunk
+from rbac.roles import Role
 from retrieval.bm25 import BM25Index
 from retrieval.search import document_search
 from retrieval.vector_store import MilvusStore
@@ -46,26 +45,31 @@ async def answer_query(
     query: str,
     store: MilvusStore,
     bm25_index: BM25Index,
+    org_id: str | None = None,
+    role: Role | None = None,
     filter_expr: str | None = None,
 ) -> AnswerWithCitations:
-    """End-to-end RAG: retrieve relevant chunks and generate a cited answer.
+    """End-to-end RAG with RBAC: retrieve → prompt → generate → cite.
 
-    Orchestrates: document_search → build_rag_prompt → generate → parse_citations.
+    Orchestrates: document_search (RBAC-filtered) → build_rag_prompt →
+    generate → parse_citations.
 
-    WHY filter_expr is threaded through (not applied here):
-        The RBAC filter must execute inside the Milvus ANN search so that
-        forbidden chunks are excluded before they become retrieval candidates.
-        Applying it here — after retrieval — would allow forbidden chunks to
-        silently enter the LLM context.  Threading the raw expression to
-        document_search preserves the Phase 1 architecture invariant that RBAC
-        filters run at the vector-store boundary.
+    RBAC enforcement path:
+        Provide org_id + role for the normal query path.  They are forwarded
+        to document_search, which builds the Milvus RBAC filter and applies
+        a BM25 post-filter.  Forbidden chunks never enter the RAG prompt.
+
+        filter_expr is an escape hatch for admin/eval paths that need a custom
+        Milvus filter without a typed Role.  If org_id + role are both provided,
+        they take precedence and filter_expr is ignored.
 
     Args:
         query:       Natural-language question.
         store:       Initialised MilvusStore with an existing collection.
         bm25_index:  Pre-built BM25Index over the visible chunk corpus.
-        filter_expr: Optional Milvus boolean expression (Phase 2 RBAC hook).
-                     None = unrestricted search (Phase 1 default).
+        org_id:      Tenant identifier (RBAC path).
+        role:        Querying user's role (RBAC path).
+        filter_expr: Direct Milvus filter expression (admin/eval override).
 
     Returns:
         AnswerWithCitations with the LLM's answer and verified source citations.
@@ -76,37 +80,38 @@ async def answer_query(
         VectorStoreError:  If the Milvus search fails.
         GenerationError:   If the LLM NIM call fails.
     """
-    log = logger.bind(query_preview=query[:80], has_filter=filter_expr is not None)
+    log = logger.bind(
+        query_preview=query[:80],
+        org_id=org_id,
+        role=str(role) if role is not None else None,
+        has_filter=filter_expr is not None or (org_id is not None and role is not None),
+    )
     log.info("answer_query.start")
     t0 = time.monotonic()
 
-    # ── Step 1: retrieve relevant chunks ──────────────────────────────────
-    # filter_expr is the Phase 2 RBAC injection point — threads to Milvus ANN.
+    # RBAC filter is built inside document_search from (org_id, role).
+    # WHY pass through (not build here): document_search also applies the same
+    # filter to BM25 results.  Building it in one place (document_search) ensures
+    # both retrieval paths see the identical policy.
     chunks: list[Chunk] = await document_search(
         query=query,
         store=store,
         bm25_index=bm25_index,
+        org_id=org_id,
+        role=role,
         filter_expr=filter_expr,
     )
     log.info("answer_query.retrieved", chunk_count=len(chunks))
 
     if not chunks:
-        log.warning("answer_query.no_chunks", msg="No chunks retrieved; returning empty answer.")
+        log.warning("answer_query.no_chunks")
         return AnswerWithCitations(
             answer="I cannot answer this question from the provided documents.",
             sources=[],
         )
 
-    # ── Step 2: build the RAG prompt ──────────────────────────────────────
     system_prompt, user_prompt = build_rag_prompt(query=query, chunks=chunks)
-
-    # ── Step 3: generate the answer ───────────────────────────────────────
     raw_answer = await generate(system_prompt=system_prompt, user_prompt=user_prompt)
-
-    # ── Step 4: enforce citations ─────────────────────────────────────────
-    # WHY post-generation enforcement: we cannot control what the model outputs,
-    # but we can verify that every cited [N] maps to an actual retrieved chunk
-    # and warn if the model answered without any grounding citations.
     result = parse_citations(answer=raw_answer, chunks=chunks)
 
     elapsed = time.monotonic() - t0
