@@ -34,6 +34,8 @@ dev = [
     "ruff>=0.4.0",
     # PDF fixture generation for ingest tests
     "fpdf2>=2.7.0",
+    # httpx mocking for NIM client tests
+    "respx>=0.21.0",
     # stubs
     "types-requests>=2.32.0",
 ]
@@ -85,6 +87,8 @@ module = [
     "pymilvus.*",
     "structlog.*",
     "rank_bm25.*",
+    "httpx.*",
+    "respx.*",
 ]
 ignore_missing_imports = true
 
@@ -94,6 +98,7 @@ testpaths = ["config", "ingest", "retrieval", "rbac", "generation", "eval", "api
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "--tb=short -q -m 'not slow'"
+asyncio_mode = "auto"
 markers = [
-    "slow: requires Docling installed + ML model download (~30-60s). Excluded from default CI run.",
+    "slow: requires external resources (Docling ML model or NIM_API_KEY + network). Excluded from default CI run.",
 ]
