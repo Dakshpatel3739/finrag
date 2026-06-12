@@ -350,3 +350,102 @@ def test_drop_collection_is_idempotent(milvus_db: Path) -> None:
     store.drop_collection()
     store.drop_collection()  # second drop — also a no-op
     assert not store.collection_exists()
+
+
+# ---------------------------------------------------------------------------
+# dense_search tests
+# ---------------------------------------------------------------------------
+
+
+def _seed_store(store: MilvusStore, n: int = 5) -> list[Chunk]:
+    """Insert n chunks with fabricated embeddings and return them."""
+    chunks = [_make_chunk(i) for i in range(n)]
+    store.insert_chunks(chunks)
+    return chunks
+
+
+def test_dense_search_returns_top_k(milvus_db: Path) -> None:
+    """dense_search must return at most top_k results."""
+    store = _make_store(milvus_db)
+    store.ensure_collection(dim=_TEST_DIM)
+    _seed_store(store, n=5)
+
+    query_vec = _fake_embedding(_TEST_DIM)
+    results = store.dense_search(query_vec, top_k=3)
+
+    assert len(results) == 3
+    store.drop_collection()
+
+
+def test_dense_search_returns_chunk_objects(milvus_db: Path) -> None:
+    """dense_search results must be Chunk objects with populated text and metadata."""
+    store = _make_store(milvus_db)
+    store.ensure_collection(dim=_TEST_DIM)
+    chunks = _seed_store(store, n=3)
+
+    query_vec = _fake_embedding(_TEST_DIM)
+    results = store.dense_search(query_vec, top_k=3)
+
+    inserted_ids = {c.chunk_id for c in chunks}
+    returned_ids = {c.chunk_id for c in results}
+    assert returned_ids.issubset(inserted_ids)
+    for chunk in results:
+        assert chunk.text  # non-empty text
+        assert chunk.doc_id == "doc_test"
+    store.drop_collection()
+
+
+def test_dense_search_filter_none_returns_all_eligible(milvus_db: Path) -> None:
+    """filter_expr=None must return all matching results without restriction."""
+    store = _make_store(milvus_db)
+    store.ensure_collection(dim=_TEST_DIM)
+    _seed_store(store, n=4)
+
+    query_vec = _fake_embedding(_TEST_DIM)
+    results = store.dense_search(query_vec, top_k=10, filter_expr=None)
+
+    assert len(results) == 4  # all 4 chunks returned, no filter applied
+    store.drop_collection()
+
+
+def test_dense_search_filter_expr_restricts_results(milvus_db: Path) -> None:
+    """A filter_expr must restrict results — this is the Phase 2 RBAC hook.
+
+    Seed two chunks with different org_ids.  Filter to one org_id.
+    Only the matching chunk should be returned.
+    This confirms the filter_expr injection point works mechanically before
+    Phase 2 builds the real RBAC expression.
+    """
+    store = _make_store(milvus_db)
+    store.ensure_collection(dim=_TEST_DIM)
+
+    chunk_acme = _make_chunk(0)  # org_id = "acme" (from _make_chunk default)
+    chunk_other = _make_chunk(1).model_copy(update={"org_id": "other_org"})
+    # Use same embedding for both so both are equally similar to the query
+    embedding = _fake_embedding(_TEST_DIM)
+    chunk_acme = chunk_acme.model_copy(update={"embedding": embedding})
+    chunk_other = chunk_other.model_copy(update={"embedding": embedding})
+    store.insert_chunks([chunk_acme, chunk_other])
+
+    query_vec = _fake_embedding(_TEST_DIM)
+    # Filter to only "acme" chunks — the Phase 2 RBAC hook
+    results = store.dense_search(query_vec, top_k=10, filter_expr='org_id == "acme"')
+
+    returned_ids = {c.chunk_id for c in results}
+    assert chunk_acme.chunk_id in returned_ids, "acme chunk must be returned"
+    assert chunk_other.chunk_id not in returned_ids, "other_org chunk must be filtered out"
+    store.drop_collection()
+
+
+def test_dense_search_embedding_field_is_none(milvus_db: Path) -> None:
+    """Returned Chunk objects must have embedding=None (not stored back)."""
+    store = _make_store(milvus_db)
+    store.ensure_collection(dim=_TEST_DIM)
+    _seed_store(store, n=2)
+
+    query_vec = _fake_embedding(_TEST_DIM)
+    results = store.dense_search(query_vec, top_k=2)
+
+    for chunk in results:
+        assert chunk.embedding is None, "Embedding should not be returned by dense_search"
+    store.drop_collection()
