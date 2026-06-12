@@ -1,10 +1,17 @@
 """
-ingest.pipeline — public entrypoint for the ingest slice.
+ingest.pipeline — public entrypoints for the ingest slice.
 
-Orchestrates parse → chunk and returns a list of schema-complete Chunks.
-This is the only function callers outside the ingest package need to call
-for Phase 1.  Later phases (embedding, Milvus insertion) will extend this
-pipeline by consuming the returned chunks.
+Two entry points:
+
+  ingest_pdf(path, ...)
+      Parse → chunk only.  Returns a list of schema-complete Chunks with
+      embedding=None.  No network, no Milvus.  Used by the embedding step
+      and by tests that need parsed chunks without NIM overhead.
+
+  ingest_and_store(path, ...)   [async]
+      Full Phase-1 end-to-end: parse → chunk → embed → ensure_collection
+      → upsert.  This is the single function an API caller needs to ingest
+      a document in Phase 1.  Returns the number of rows written to Milvus.
 
 Structured logging at every boundary makes it easy to trace throughput,
 spot errors, and wire metrics into Prometheus (Phase 5).
@@ -94,3 +101,72 @@ def ingest_pdf(
         content_type_breakdown=breakdown,
     )
     return chunks
+
+
+async def ingest_and_store(
+    path: str | Path,
+    org_id: str = "dev",
+    allowed_roles: tuple[str, ...] | list[str] = ("owner",),
+    sensitivity_level: str | SensitivityLevel = SensitivityLevel.INTERNAL,
+) -> int:
+    """Parse, embed, and store a PDF — the full Phase-1 ingest entrypoint.
+
+    Orchestrates the complete pipeline:
+        ingest_pdf   → parse + chunk (no network)
+        embed_chunks → NeMo NIM embedding (requires NIM_API_KEY)
+        ensure_collection → create Milvus collection if absent (idempotent)
+        insert_chunks → upsert embedded chunks into Milvus
+
+    Args:
+        path:              Path to the PDF file.
+        org_id:            Tenant identifier (Phase 2 sets from JWT; default "dev").
+        allowed_roles:     RBAC roles allowed to retrieve chunks from this doc.
+        sensitivity_level: Sensitivity tier (Phase 2 sets from doc metadata).
+
+    Returns:
+        Number of rows written to Milvus (as reported by upsert_count).
+
+    Raises:
+        IngestError:      If parsing or chunking fails.
+        EmbeddingError:   If the NIM embedding call fails.
+        VectorStoreError: If the Milvus write fails.
+    """
+    # Import here to avoid circular dependency and keep imports lazy
+    # (retrieval is a separate domain; ingest should not hard-depend on it).
+    from ingest.embedder import embed_chunks
+    from retrieval.vector_store import MilvusStore
+
+    path = Path(path)
+    log = logger.bind(doc_name=path.name, org_id=org_id)
+    log.info("pipeline.ingest_and_store.start")
+
+    chunks = ingest_pdf(
+        path,
+        org_id=org_id,
+        allowed_roles=allowed_roles,
+        sensitivity_level=sensitivity_level,
+    )
+
+    if not chunks:
+        log.warning("pipeline.ingest_and_store.no_chunks")
+        return 0
+
+    embedded = await embed_chunks(chunks)
+
+    # Detect dimension from the first vector — never hardcode
+    first_emb = embedded[0].embedding
+    if first_emb is None:  # pragma: no cover — embed_chunks guarantees non-None
+        raise IngestError("embed_chunks returned a chunk with None embedding")
+    dim = len(first_emb)
+
+    store = MilvusStore()
+    store.ensure_collection(dim)
+    count = store.insert_chunks(embedded)
+
+    log.info(
+        "pipeline.ingest_and_store.done",
+        chunk_count=len(embedded),
+        rows_stored=count,
+        embedding_dim=dim,
+    )
+    return count
