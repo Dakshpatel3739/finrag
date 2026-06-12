@@ -4,14 +4,20 @@ ingest.pipeline — public entrypoints for the ingest slice.
 Two entry points:
 
   ingest_pdf(path, ...)
-      Parse → chunk only.  Returns a list of schema-complete Chunks with
-      embedding=None.  No network, no Milvus.  Used by the embedding step
-      and by tests that need parsed chunks without NIM overhead.
+      Parse → chunk → classify.  Returns a list of schema-complete Chunks
+      with real org_id, sensitivity_level, and allowed_roles (Phase 2).
+      embedding=None (filled by the embedding step).
 
   ingest_and_store(path, ...)   [async]
-      Full Phase-1 end-to-end: parse → chunk → embed → ensure_collection
+      Full end-to-end: parse → chunk → classify → embed → ensure_collection
       → upsert.  This is the single function an API caller needs to ingest
-      a document in Phase 1.  Returns the number of rows written to Milvus.
+      a document.  Returns the number of rows written to Milvus.
+
+Phase 2 change from Phase 1:
+  allowed_roles is no longer a caller parameter.  It is derived automatically
+  from the sensitivity_level via the policy table in rbac.roles.  This
+  prevents privilege-escalation errors from callers specifying incorrect roles.
+  sensitivity_level=None invokes the heuristic classifier (best-effort).
 
 Structured logging at every boundary makes it easy to trace throughput,
 spot errors, and wire metrics into Prometheus (Phase 5).
@@ -27,6 +33,7 @@ from ingest.chunker import chunk_document
 from ingest.errors import IngestError
 from ingest.models import Chunk, ContentType, SensitivityLevel
 from ingest.parser import parse_pdf
+from rbac.classifier import assign_access
 
 logger: structlog.BoundLogger = structlog.get_logger(__name__)
 
@@ -34,38 +41,37 @@ logger: structlog.BoundLogger = structlog.get_logger(__name__)
 def ingest_pdf(
     path: str | Path,
     org_id: str = "dev",
-    allowed_roles: tuple[str, ...] | list[str] = ("owner",),
-    sensitivity_level: str | SensitivityLevel = SensitivityLevel.INTERNAL,
+    sensitivity_level: SensitivityLevel | None = None,
 ) -> list[Chunk]:
-    """Parse a PDF and return schema-complete chunks ready for embedding.
+    """Parse a PDF and return schema-complete chunks with real RBAC metadata.
 
-    This is the Phase 1 public entry point.  It does NOT embed or write to
-    Milvus — those are the next slices.
+    Chunks are stamped with org_id, sensitivity_level, and allowed_roles
+    by rbac.classifier.assign_access.  If sensitivity_level is None, the
+    heuristic classifier inspects each chunk's text/section for restricted
+    signals; otherwise the provided level is applied to all chunks.
+
+    This does NOT embed or write to Milvus — those are downstream steps.
 
     Args:
         path:              Filesystem path to the PDF.
-        org_id:            Tenant identifier (Phase 2 sets from JWT).
-        allowed_roles:     RBAC roles allowed to retrieve chunks from this doc.
-        sensitivity_level: Access sensitivity tier (Phase 2 sets from metadata).
+        org_id:            Tenant organisation identifier.
+        sensitivity_level: Access sensitivity tier.  None = use heuristic
+                           per-chunk classification (best-effort).
 
     Returns:
         A list of Chunk objects with all schema fields populated.
-        ``embedding`` and ``bm25_tokens`` are ``None`` (filled by later slices).
+        ``embedding`` and ``bm25_tokens`` are ``None`` (filled later).
 
     Raises:
         IngestError: On any parse or chunking failure (never bare Exception).
     """
     path = Path(path)
-    level = SensitivityLevel(sensitivity_level)
-    roles = list(allowed_roles)
-
     log = logger.bind(doc_name=path.name, org_id=org_id, path=str(path))
     log.info("ingest.pipeline.start")
 
     try:
         parsed_doc = parse_pdf(path)
     except IngestError:
-        # Already logged inside parse_pdf; re-raise so callers can handle it
         raise
     except Exception as exc:
         log.error("ingest.pipeline.unexpected_parse_error", error=str(exc))
@@ -78,19 +84,25 @@ def ingest_pdf(
     )
 
     try:
-        chunks = chunk_document(
-            parsed_doc,
-            org_id=org_id,
-            allowed_roles=roles,
-            sensitivity_level=level,
-        )
+        # chunk_document sets placeholder allowed_roles; assign_access overwrites
+        # them with the policy-derived list for the actual sensitivity level.
+        raw_chunks = chunk_document(parsed_doc, org_id=org_id)
     except IngestError:
         raise
     except Exception as exc:
         log.error("ingest.pipeline.unexpected_chunk_error", error=str(exc))
         raise IngestError(f"Unexpected error chunking {path}: {exc}") from exc
 
-    # Log breakdown by content type
+    # Apply RBAC classification: stamp real sensitivity_level + allowed_roles.
+    # WHY per-chunk (not per-document): the heuristic classifier can assign
+    # different sensitivities to different sections of the same document
+    # (e.g. a salary table on page 8 gets RESTRICTED; other pages stay INTERNAL).
+    # Explicit sensitivity_level overrides the heuristic for all chunks.
+    chunks: list[Chunk] = [
+        assign_access(chunk, org_id=org_id, sensitivity_level=sensitivity_level)
+        for chunk in raw_chunks
+    ]
+
     breakdown = {ct.value: 0 for ct in ContentType}
     for chunk in chunks:
         breakdown[chunk.content_type] += 1
@@ -106,22 +118,21 @@ def ingest_pdf(
 async def ingest_and_store(
     path: str | Path,
     org_id: str = "dev",
-    allowed_roles: tuple[str, ...] | list[str] = ("owner",),
-    sensitivity_level: str | SensitivityLevel = SensitivityLevel.INTERNAL,
+    sensitivity_level: SensitivityLevel | None = None,
 ) -> int:
-    """Parse, embed, and store a PDF — the full Phase-1 ingest entrypoint.
+    """Parse, embed, and store a PDF — the full ingest entrypoint.
 
     Orchestrates the complete pipeline:
-        ingest_pdf   → parse + chunk (no network)
+        ingest_pdf   → parse + chunk + classify (no network)
         embed_chunks → NeMo NIM embedding (requires NIM_API_KEY)
         ensure_collection → create Milvus collection if absent (idempotent)
         insert_chunks → upsert embedded chunks into Milvus
 
     Args:
         path:              Path to the PDF file.
-        org_id:            Tenant identifier (Phase 2 sets from JWT; default "dev").
-        allowed_roles:     RBAC roles allowed to retrieve chunks from this doc.
-        sensitivity_level: Sensitivity tier (Phase 2 sets from doc metadata).
+        org_id:            Tenant organisation identifier.
+        sensitivity_level: Sensitivity tier.  None = heuristic per-chunk
+                           classification.
 
     Returns:
         Number of rows written to Milvus (as reported by upsert_count).
@@ -131,8 +142,6 @@ async def ingest_and_store(
         EmbeddingError:   If the NIM embedding call fails.
         VectorStoreError: If the Milvus write fails.
     """
-    # Import here to avoid circular dependency and keep imports lazy
-    # (retrieval is a separate domain; ingest should not hard-depend on it).
     from ingest.embedder import embed_chunks
     from retrieval.vector_store import MilvusStore
 
@@ -140,12 +149,7 @@ async def ingest_and_store(
     log = logger.bind(doc_name=path.name, org_id=org_id)
     log.info("pipeline.ingest_and_store.start")
 
-    chunks = ingest_pdf(
-        path,
-        org_id=org_id,
-        allowed_roles=allowed_roles,
-        sensitivity_level=sensitivity_level,
-    )
+    chunks = ingest_pdf(path, org_id=org_id, sensitivity_level=sensitivity_level)
 
     if not chunks:
         log.warning("pipeline.ingest_and_store.no_chunks")
@@ -153,9 +157,8 @@ async def ingest_and_store(
 
     embedded = await embed_chunks(chunks)
 
-    # Detect dimension from the first vector — never hardcode
     first_emb = embedded[0].embedding
-    if first_emb is None:  # pragma: no cover — embed_chunks guarantees non-None
+    if first_emb is None:  # pragma: no cover
         raise IngestError("embed_chunks returned a chunk with None embedding")
     dim = len(first_emb)
 

@@ -142,6 +142,8 @@ async def test_filter_expr_threads_to_document_search(
         query="query",
         store=store,
         bm25_index=bm25,
+        org_id=None,
+        role=None,
         filter_expr=expr,
     )
 
