@@ -44,7 +44,7 @@ import structlog
 from pymilvus import DataType, MilvusClient
 
 from config.settings import get_settings
-from ingest.models import Chunk
+from ingest.models import Chunk, ContentType, SensitivityLevel
 from retrieval.errors import VectorStoreError
 
 logger: structlog.BoundLogger = structlog.get_logger(__name__)
@@ -172,6 +172,99 @@ class MilvusStore:
             dim=dim,
             fields=13,
         )
+
+    # ------------------------------------------------------------------
+    # Search
+    # ------------------------------------------------------------------
+
+    def dense_search(
+        self,
+        query_vector: list[float],
+        top_k: int,
+        filter_expr: str | None = None,
+    ) -> list[Chunk]:
+        """Run an ANN vector search and return the top-k matching chunks.
+
+        WHY filter_expr exists here:
+            filter_expr is the retrieval-time RBAC injection point.
+            Phase 2 builds the expression:
+                'org_id == "{org}" AND ARRAY_CONTAINS(allowed_roles, "{role}")'
+            and passes it here.  The filter runs INSIDE Milvus ANN search —
+            not as a post-filter — so forbidden chunks are excluded at the
+            index level and never enter the reranker or LLM context window.
+
+        Args:
+            query_vector: The query embedding (must match collection dim).
+            top_k:        Maximum number of chunks to return.
+            filter_expr:  Optional Milvus boolean expression string.
+                          Pass None (Phase 1) for unrestricted search.
+                          Phase 2 injects the RBAC expression here.
+
+        Returns:
+            List of Chunk objects ordered by cosine similarity (highest first).
+            The embedding field is always None in returned chunks (not stored
+            back — callers use chunks for text/metadata, not re-embedding).
+
+        Raises:
+            VectorStoreError: If the Milvus search fails.
+        """
+        output_fields = [
+            "chunk_id",
+            "doc_id",
+            "doc_name",
+            "page_number",
+            "section",
+            "org_id",
+            "allowed_roles",
+            "sensitivity_level",
+            "text",
+            "content_type",
+            "source_modality",
+            "caption",
+        ]
+        search_kwargs: dict[str, Any] = {
+            "collection_name": self._collection_name,
+            "data": [query_vector],
+            "limit": top_k,
+            "output_fields": output_fields,
+            "anns_field": "embedding",
+        }
+        # Pass filter only when provided — empty string disables filtering in Milvus
+        if filter_expr:
+            search_kwargs["filter"] = filter_expr
+
+        log = logger.bind(
+            collection=self._collection_name,
+            top_k=top_k,
+            has_filter=filter_expr is not None,
+        )
+        log.debug("vector_store.dense_search")
+
+        results = self._client.search(**search_kwargs)
+        hits = results[0]  # results is list[list[hit]], one inner list per query vector
+
+        chunks: list[Chunk] = []
+        for hit in hits:
+            entity = hit["entity"]
+            chunk = Chunk(
+                chunk_id=entity["chunk_id"],
+                doc_id=entity["doc_id"],
+                doc_name=entity["doc_name"],
+                page_number=entity["page_number"],
+                section=entity["section"],
+                org_id=entity["org_id"],
+                allowed_roles=list(entity["allowed_roles"]),
+                sensitivity_level=SensitivityLevel(entity["sensitivity_level"]),
+                text=entity["text"],
+                content_type=ContentType(entity["content_type"]),
+                source_modality=entity["source_modality"],
+                caption=entity["caption"] or None,
+                embedding=None,  # not stored back — callers use text/metadata
+            )
+            chunks.append(chunk)
+
+        log.debug("vector_store.dense_search_done", hits=len(chunks))
+        return chunks
 
     # ------------------------------------------------------------------
     # Data mutation
