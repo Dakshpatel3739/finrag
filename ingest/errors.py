@@ -26,3 +26,11 @@ class ParseError(IngestError):
 
 class ChunkError(IngestError):
     """Raised when chunking produces an invalid or empty result."""
+
+
+class EmbeddingError(IngestError):
+    """Raised when the NeMo Embedding NIM fails to embed texts.
+
+    Covers permanent HTTP failures after retries, unexpected response shapes,
+    and internal invariant violations (count/dimension mismatch).
+    """
