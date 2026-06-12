@@ -12,6 +12,14 @@
 
 ## CHANGELOG
 
+### [2026-06-12] Phase 1 slice 4 — hybrid retrieval + reranking
+- **What:** `dense_search` on MilvusStore (with `filter_expr` RBAC injection point), in-memory `BM25Index` (rank-bm25, whitespace tokenisation), `rrf_fuse` (Reciprocal Rank Fusion, k from system_config), async `rerank` NIM client (nv-rerankqa-mistral-4b-v3, env-driven URL/model, retry on 429/5xx), `document_search` orchestrator (embed→dense→bm25→rrf→rerank), `RerankError`, `config_db_path` setting, ADR-005. 53 new tests (all non-slow).
+- **Why:** turn a query string into a ranked list of relevant chunks for the generation step; set up the Phase 2 RBAC hook at the exact Milvus search boundary.
+- **RBAC hook:** `filter_expr: str | None = None` parameter threads from `document_search` → `dense_search` → Milvus ANN search. Phase 2 injects `'org_id == "{o}" AND ARRAY_CONTAINS(allowed_roles, "{r}")'` here; forbidden chunks never enter the reranker or LLM.
+- **Key invariant:** `embed_texts(..., input_type="query")` — nv-embedqa-e5-v5 is asymmetric; using "passage" for queries silently destroys recall. Guarded by `test_embed_called_with_input_type_query`.
+- **Files:** retrieval/errors.py, retrieval/vector_store.py, retrieval/bm25.py, retrieval/fusion.py, retrieval/reranker.py, retrieval/search.py, retrieval/test_fusion.py, retrieval/test_bm25.py, retrieval/test_reranker.py, retrieval/test_search.py, retrieval/test_vector_store.py (extended), config/settings.py, docs/adr/ADR-005*, CLAUDE_CHANGES.md.
+- **Test result:** 116 passed, 6 deselected (slow), 3 warnings.
+
 ### [2026-06-12] Phase 1 slice 3 — Milvus write (vector store + ingest_and_store)
 - **What:** `VectorStoreError` exception, `MilvusStore` class (full 13-field schema from day one, `allowed_roles` as `DataType.ARRAY` of VARCHAR, AUTOINDEX+COSINE metric, upsert semantics), `ingest_and_store()` async end-to-end entrypoint in pipeline.py, 14 Milvus-Lite tests (all non-slow, in-process), ADR-004.
 - **Why:** persist embedded chunks in Milvus so Phase 1 slice 4 can do hybrid retrieval; schema laid down once with all future-phase fields to avoid collection re-creation.
@@ -54,6 +62,22 @@
 - **Root cause:** macOS has two Python 3.12 installs; `pip` (Framework) and `python3.12 -m pip` (Homebrew) manage different site-packages.
 - **Fix:** ran `/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12 -m pytest` explicitly; installed missing deps (`structlog`, `mypy`) into the Framework env via `pip install`.
 - **Fallback / prevention:** add a `Makefile` target or `CONTRIBUTING.md` note specifying `pip install -e ".[dev]"` must be done in the same env used to run tests. TODO for slice 3.
+- **Status:** Resolved.
+
+### [2026-06-12] Phase 1 slice 4 — BM25Okapi ZeroDivisionError on empty corpus
+- **Symptom:** `BM25Okapi([[]])` raises `ZeroDivisionError: division by zero` in `_calc_idf` when given an empty or single-empty-doc corpus.
+- **Where:** retrieval/bm25.py `BM25Index.__init__()` and retrieval/test_bm25.py + test_search.py.
+- **Root cause:** rank-bm25's `_calc_idf` divides by `len(self.idf)` which is 0 when no real tokens are indexed.
+- **Fix:** store `_bm25: BM25Okapi | None = None` when `chunks` is empty; guard `search()` with `if self._bm25 is None: return []`.
+- **Fallback / prevention:** any BM25 wrapper over rank-bm25 must guard the empty-corpus case. Added `test_empty_corpus_builds_valid_index` to the suite.
+- **Status:** Resolved.
+
+### [2026-06-12] Phase 1 slice 4 — test_filter_expr incorrectly asserted BM25 is filtered
+- **Symptom:** `test_filter_expr_threads_to_dense_search` failed because `chunk_other` appeared in rerank candidates despite `filter_expr='org_id == "acme"'`.
+- **Where:** retrieval/test_search.py.
+- **Root cause:** `filter_expr` correctly scopes only the dense (Milvus) search. The BM25 index is corpus-wide in Phase 1 — filtering BM25 is a Phase 2 concern. The test incorrectly asserted that `other_org` chunks would be absent from rerank.
+- **Fix:** rewrote the test to spy on `store.dense_search` and assert it received the correct `filter_expr`, rather than asserting absence of chunks from rerank.
+- **Fallback / prevention:** ADR-005 documents that Phase 2 must scope the BM25 index to the authorised corpus (rebuild per-org or filter at index-build time).
 - **Status:** Resolved.
 
 ### [2026-06-12] Phase 1 slice 3 — mypy generator return type on pytest fixture
