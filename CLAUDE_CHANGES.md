@@ -12,6 +12,23 @@
 
 ## CHANGELOG
 
+### [2026-06-13] Phase 2 — chunk-level RBAC enforced at retrieval time (Phase 2 COMPLETE)
+- **What:** Full chunk-level RBAC with dual-axis enforcement (org_id tenant isolation + role allowlist). New: `rbac/roles.py` (Role StrEnum, `_POLICY` dict — single source of truth, `sensitivity_to_default_roles`, `can_role_see`); `rbac/classifier.py` (heuristic keyword scanner → SensitivityLevel, `assign_access` stamps org_id + allowed_roles onto every chunk at ingest time); `rbac/filter.py` (`build_rbac_filter` with injection prevention — rejects `"`, `\`, null bytes in org_id). Updated: `ingest/pipeline.py` (removed hard-coded `allowed_roles` param, now calls `assign_access` per chunk); `retrieval/search.py` (added `org_id`+`role` params, builds Milvus filter AND BM25 post-filter via `_passes_rbac`); `generation/answer.py` (passes `org_id`+`role` to `document_search`). 51 new tests: `test_roles.py` (24 tests — exhaustive policy table, all 12 role×sensitivity combinations), `test_filter.py` (15 tests — injection prevention: double-quote, backslash, null byte, empty org_id), `test_adversarial_leaks.py` (12 adversarial security tests — zero-leak proofs, prompt injection immunity, BM25 side-channel closure, cross-org isolation). ADR-007.
+- **Why:** Non-negotiable security invariant: forbidden chunks must NEVER enter the LLM context window. Prompt-level access control is defeatable by prompt injection; Milvus `ARRAY_CONTAINS` runs at C++ storage layer before any Python sees the data. BM25 post-filter closes the lexical side-channel.
+- **Security invariants proven by adversarial suite:**
+  - HR cannot retrieve RESTRICTED salary chunk (chunk count == 0)
+  - EMPLOYEE cannot retrieve RESTRICTED salary chunk (chunk count == 0)
+  - HR cannot retrieve GLOBEX chunks (cross-tenant isolation, count == 0)
+  - EMPLOYEE cannot retrieve GLOBEX chunks (cross-tenant isolation, count == 0)
+  - OWNER only sees its own org's chunks (count == 3 for acme, never globex)
+  - RESTRICTED chunk NEVER enters build_rag_prompt when called as HR (context-window proof via mock capture)
+  - 5 prompt injection attempts all return count == 0 (filter is at C++ layer, query string cannot influence it)
+  - BM25 "salary" keyword query returns 0 results for HR (BM25 side-channel closed by _passes_rbac post-filter)
+  - Positive sanity: HR can retrieve public + internal chunks (count == 2)
+  - Empty result for non-existent org
+- **Files:** rbac/roles.py, rbac/classifier.py, rbac/filter.py, rbac/conftest.py, rbac/test_roles.py, rbac/test_filter.py, rbac/test_adversarial_leaks.py, rbac/__init__.py, ingest/pipeline.py, retrieval/search.py, generation/answer.py, generation/test_answer.py (updated filter_expr assertion), docs/adr/ADR-007*, CLAUDE_CHANGES.md.
+- **Test result:** 199 passed, 7 deselected (slow), 3 warnings.
+
 ### [2026-06-12] Phase 1 slice 5 — generation + citation enforcement (Phase 1 COMPLETE)
 - **What:** `GenerationError` exception; async `generate()` LLM NIM client (OpenAI-compatible chat/completions, temperature=0.1, retry on 429/5xx, nim_cost_log hook); `build_rag_prompt(query, chunks)` assembling numbered [N]-labeled context block + grounding+citation system prompt; `parse_citations(answer, chunks)` post-generation enforcement (reject hallucinated indices, warn on uncited positive answers, no warning on refusal); `AnswerWithCitations` + `CitationSource` pydantic v2 models; `answer_query` Phase 1 end-to-end entrypoint (document_search → build_rag_prompt → generate → parse_citations, filter_expr threaded through for Phase 2 RBAC); 32 tests (all non-slow) + 1 @pytest.mark.slow live test; ADR-006.
 - **Why:** complete the Phase 1 loop — upload 10-K → ask question → cited answer. `answer_query` is the single call-site for Phase 2 and beyond.
@@ -111,6 +128,22 @@
 - **Root cause:** pytest's `caplog` fixture captures messages routed through Python's standard `logging` module. structlog by default uses its own renderer pipeline that writes directly to stdout (via `PrintLoggerFactory`), bypassing the Python logging system entirely.
 - **Fix:** replaced `caplog.at_level(logging.WARNING)` with `structlog.testing.capture_logs()` context manager, which intercepts structlog events at the processor level and returns them as a list of dicts. Assertions now check `e["event"]` keys.
 - **Fallback / prevention:** any test that asserts structlog emitted a warning or error must use `structlog.testing.capture_logs()`, not `caplog`. Python `caplog` only works when structlog is explicitly configured to route through `logging.Logger` (e.g., via `structlog.stdlib.add_log_level` + `structlog.stdlib.PositionalArgumentsFormatter` pipeline). The default structlog configuration does not do this.
+- **Status:** Resolved.
+
+### [2026-06-13] Phase 2 — ruff EN DASH in docstring blocked commit
+- **Symptom:** `ruff check` reported `RUF002 Docstring contains ambiguous – (EN DASH)` in `rbac/roles.py:6`. The `sed -i` command to fix it failed on macOS with `sed: -I or -i may not be used with stdin`.
+- **Where:** rbac/roles.py, line 6. Session also interrupted here.
+- **Root cause:** The docstring contained a Unicode EN DASH (U+2013) in "role–sensitivity" instead of a plain ASCII hyphen. macOS BSD `sed` requires `sed -i '' ...` (empty string for in-place) not `sed -i ...` (Linux form).
+- **Fix:** Used the Edit tool directly to replace the EN DASH with a HYPHEN-MINUS.
+- **Fallback / prevention:** When `sed -i` fails on macOS, use the Edit tool or `perl -pi -e` which has consistent cross-platform in-place semantics.
+- **Status:** Resolved.
+
+### [2026-06-13] Phase 2 — generation/test_answer.py broken by new document_search signature
+- **Symptom:** `test_filter_expr_threads_to_document_search` was asserting `mock_doc_search.assert_called_once_with(query=..., store=..., bm25_index=..., filter_expr=expr)` — missing the new `org_id=None, role=None` kwargs added in Phase 2.
+- **Where:** generation/test_answer.py.
+- **Root cause:** `answer_query` now always passes `org_id` and `role` to `document_search` (defaulting to None). The test's call assertion did not include those kwargs.
+- **Fix:** Updated the assertion to include `org_id=None, role=None`.
+- **Fallback / prevention:** When a function signature gains new parameters with defaults, review existing mock call assertions that use `assert_called_once_with` — they assert on ALL kwargs.
 - **Status:** Resolved.
 
 ### [TEMPLATE — copy for each incident]
