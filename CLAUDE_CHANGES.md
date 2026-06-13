@@ -53,6 +53,26 @@
   - `ruff format --check .` → 51 files already formatted
   - `mypy --strict .` → Success: no issues found in 51 source files
   - `pytest -m "not slow"` → 199 passed, 7 deselected, 4 warnings
+### [2026-06-13] CI red on main — ruff version drift (RUF059 + collateral rule hits)
+
+- **Symptom:** CI (GitHub Actions) failed on the `ruff check .` step with 4 `RUF059` errors in `rbac/test_adversarial_leaks.py` at lines 200, 230, 256, 491: `unused-unpacked-variable` on `corpus` in `store, bm25, corpus = rbac_store_and_index`. All four tests don't use `corpus`. Locally, `ruff check` passed because local ruff was an older version that didn't enforce RUF059.
+- **Root cause:** Version drift — local ruff was pre-0.15.x while CI installed `ruff==0.15.17` (unpinned `>=0.4.0` in `pyproject.toml`). RUF059 (`unused-unpacked-variable`) was added in ruff 0.15.x. Additionally, `mypy>=1.10.0` and `pytest>=8.2.0` were also unpinned, leaving CI free to pick up breaking-change versions at any time.
+- **Additional collateral found during fix:** Upgrading to pinned ruff 0.15.17 revealed 21 additional lint errors across `api/` files (F401 unused imports, ANN401 `Any` annotations, B008 `Depends` in defaults, B904 `raise … from`, UP017/UP045/RUF023 style upgrades, I001 import order, E501 line length). Mypy 2.1.0 revealed 1 pre-existing type error (`NodeItem.export_to_markdown` attr-defined). CI YAML had two broken env vars (`DEPLOY_MODE: dev` → invalid, `JWT_SECRET: ci-test-secret` → only 14 chars, minimum 32). `from __future__ import annotations` in `api/app.py` broke FastAPI body-parameter resolution for locally-scoped Pydantic models (annotations became lazy strings; FastAPI treated the `body: LoginRequest` param as a query param, causing 422 on all endpoints).
+- **Fix:**
+  1. Renamed unused `corpus` → `_corpus` at the 4 offending lines (lines 200, 230, 256, 491). The other 8 uses of `corpus` in the file DO use the variable and were not changed.
+  2. Ran `ruff check --fix .` to auto-fix 13 of 21 collateral errors; fixed remaining 8 manually (import cleanup, B904 `from exc`/`from None`, B008 `# noqa`, ANN401 proper starlette types).
+  3. Added `# type: ignore[attr-defined]` on `item.export_to_markdown()` — Docling's `NodeItem` stubs don't expose the `TableItem` subclass method; the `try/except` already guards it at runtime.
+  4. Removed `from __future__ import annotations` from `api/app.py` — FastAPI uses `get_type_hints()` to resolve parameter types; PEP 563 deferred evaluation makes locally-scoped Pydantic model class names unresolvable, silently degrading them to query parameters (422 on all endpoints).
+  5. Fixed CI env vars: `DEPLOY_MODE: dev` → `hosted`; `JWT_SECRET` padded to 52 chars (≥ 32 required by startup assertion).
+  6. Added `pydantic[email]` to main dependencies (required for `EmailStr` on `LoginRequest`/`CreateUserRequest`).
+  7. Pinned all dev tool versions to exact CI versions: `ruff==0.15.17`, `mypy==2.1.0`, `pytest==9.0.3`, `pytest-asyncio==1.4.0`, `respx==0.23.1`.
+  8. Added explicit `-m "not slow"` to the CI pytest step (addopts in pyproject already covered it, but explicit is safer against future config drift).
+- **Prevention:** Exact-version pins (`==`) in `[project.optional-dependencies].dev` — no more `>=` drift. Local `pip install -e ".[dev]"` now installs the EXACT same binaries CI uses. Discrepancy between local and CI is structurally impossible once everyone reinstalls.
+- **Final CI command results (local, pinned versions):**
+  - `ruff check .` → All checks passed
+  - `ruff format --check .` → 58 files already formatted
+  - `mypy --strict .` → Success: no issues found in 58 source files
+  - `pytest -m "not slow"` → 236 passed, 7 deselected, 7 warnings
 
 ---
 
@@ -70,6 +90,24 @@
 - **Why:** CI was red on main due to ruff version drift — unpinned `>=` allowed CI to pick up ruff 0.15.17 which enforces RUF059; local was older and silent. Pinning dev tools makes local == CI structurally.
 - **Files:** `rbac/test_adversarial_leaks.py`, `pyproject.toml`, `.github/workflows/ci.yml`, `ingest/parser.py`, `CLAUDE_CHANGES.md`.
 - **Test result:** 199 passed, 7 deselected (slow), 4 warnings. ruff: clean. mypy --strict: clean (51 source files).
+### [2026-06-13] chore/fix-ci — ruff RUF059 fix + dev-tool version pinning
+- **What:** Fixed 4 `RUF059` unused-unpacked-variable errors in `rbac/test_adversarial_leaks.py`; pinned dev tool versions to eliminate CI/local drift; fixed 21 collateral ruff/mypy/pytest issues uncovered by the upgrade; corrected broken CI env vars; removed `from __future__ import annotations` from `api/app.py` that caused 422s on all FastAPI endpoints.
+- **Why:** CI was red on main. Root cause: unpinned `ruff>=0.4.0` in pyproject.toml allowed CI to pick up ruff 0.15.17 which enforces RUF059; local ruff was older and silent. Pinning dev tools to exact versions makes local == CI structurally.
+- **Files:** `rbac/test_adversarial_leaks.py` (4× `corpus` → `_corpus`), `pyproject.toml` (pin dev deps, add `pydantic[email]`), `.github/workflows/ci.yml` (add `-m "not slow"`, fix DEPLOY_MODE and JWT_SECRET), `api/app.py` (remove `from __future__ import annotations`, remove unused imports), `api/identity.py` (B904 from-clause, B008 noqa, proper starlette types), `api/security.py` (UP017 UTC alias), `api/users.py` (UP045 X|None), `api/test_*.py` (import sort, E501 wrap, return types), `ingest/parser.py` (type: ignore[attr-defined] for Docling subclass method), `CLAUDE_CHANGES.md`.
+- **Test result:** 236 passed, 7 deselected (slow), 7 warnings. ruff: clean. mypy --strict: clean (58 source files).
+
+### [2026-06-13] Phase 3 — JWT auth + multi-tenancy (Phase 3 COMPLETE)
+- **What:** Full JWT authentication layer that makes identity unforgeable. New: `api/security.py` (argon2 password hashing via passlib, `hash_password`/`verify_password` with constant-time compare; JWT create/decode via python-jose HS256, `create_access_token`/`decode_token`, custom `AuthError`/`TokenExpiredError`/`InvalidTokenError`); `api/identity.py` (typed `Identity` class with `user_id`/`org_id`/`role`, `get_current_identity` FastAPI dependency — the SOLE gateway for identity in the system, structured-logs every auth decision); `api/users.py` (SQLite `UserStore` with `create_user`/`get_user_by_email`/`authenticate`, `DuplicateUserError`, `get_user_store` process-singleton); `api/app.py` (FastAPI chain-server with `create_app()` factory, startup JWT_SECRET assertion in lifespan, structured-log middleware; endpoints: `POST /auth/login`, `POST /admin/users` owner-only, `POST /documents/upload`, `POST /query`, `GET /healthz`). Also: `ingest/__init__.py` fixed (removed eager `ingest.pipeline` import that caused circular import via `api.identity → rbac.roles → ingest → ingest.pipeline → rbac.classifier → rbac.roles`). 37 new tests: `test_security.py` (12 tests — hash round-trips, slow-hash proof, JWT claims, expired/tampered/wrong-secret/malformed rejection, missing-claim rejection), `test_identity.py` (6 tests — valid token → Identity, 401 on missing/expired/bad-sig/malformed/unknown-role), `test_app.py` (19 tests including 7 adversarial). ADR-008.
+- **Why:** Phase 2's RBAC trusted `(org_id, role)` as function arguments. Phase 3 makes these come ONLY from a cryptographically-signed JWT that a logged-in user cannot forge. `org_id` and `role` have NO request-body representation at any endpoint — isolation is structural, not just a policy check.
+- **Security invariants proven by adversarial suite:**
+  - FORGED ROLE (#1): HR user's `role` in `/query` response is "hr" — request body has no role field to elevate
+  - TOKEN TAMPERING (#2): Valid HR token with role claim flipped to "owner" (without re-signing) → 401 signature failure. This is the key proof: self-promotion without the JWT_SECRET is impossible.
+  - CROSS-TENANT (#3): acme-token user's `/query` response `org_id` is always "acme" — no request field exists to specify "globex"; cross-tenant access is impossible by construction
+  - WRONG SECRET (#4): Token signed with a different secret → 401
+  - EXPIRED TOKEN (#5): Token past `exp` → 401
+  - NON-OWNER CREATE USER (#6): role=employee/hr/finance calling `/admin/users` → 403; only owner can provision, and only into their own org
+- **Files:** api/security.py, api/identity.py, api/users.py, api/app.py, api/test_security.py, api/test_identity.py, api/test_app.py, ingest/__init__.py (circular-import fix), pyproject.toml (passlib[argon2], python-jose[cryptography], types-passlib), .env.example (updated JWT docs), docs/adr/ADR-008*, CLAUDE_CHANGES.md.
+- **Test result:** 236 passed, 7 deselected (slow), 7 warnings. ruff: clean. mypy --strict: clean (58 source files).
 
 ### [2026-06-13] Phase 2 — chunk-level RBAC enforced at retrieval time (Phase 2 COMPLETE)
 - **What:** Full chunk-level RBAC with dual-axis enforcement (org_id tenant isolation + role allowlist). New: `rbac/roles.py` (Role StrEnum, `_POLICY` dict — single source of truth, `sensitivity_to_default_roles`, `can_role_see`); `rbac/classifier.py` (heuristic keyword scanner → SensitivityLevel, `assign_access` stamps org_id + allowed_roles onto every chunk at ingest time); `rbac/filter.py` (`build_rbac_filter` with injection prevention — rejects `"`, `\`, null bytes in org_id). Updated: `ingest/pipeline.py` (removed hard-coded `allowed_roles` param, now calls `assign_access` per chunk); `retrieval/search.py` (added `org_id`+`role` params, builds Milvus filter AND BM25 post-filter via `_passes_rbac`); `generation/answer.py` (passes `org_id`+`role` to `document_search`). 51 new tests: `test_roles.py` (24 tests — exhaustive policy table, all 12 role×sensitivity combinations), `test_filter.py` (15 tests — injection prevention: double-quote, backslash, null byte, empty org_id), `test_adversarial_leaks.py` (12 adversarial security tests — zero-leak proofs, prompt injection immunity, BM25 side-channel closure, cross-org isolation). ADR-007.
@@ -203,6 +241,22 @@
 - **Root cause:** `answer_query` now always passes `org_id` and `role` to `document_search` (defaulting to None). The test's call assertion did not include those kwargs.
 - **Fix:** Updated the assertion to include `org_id=None, role=None`.
 - **Fallback / prevention:** When a function signature gains new parameters with defaults, review existing mock call assertions that use `assert_called_once_with` — they assert on ALL kwargs.
+- **Status:** Resolved.
+
+### [2026-06-13] Phase 3 — circular import via ingest.__init__ when api.identity is loaded first
+- **Symptom:** `ImportError: cannot import name 'Role' from partially initialized module 'rbac.roles'` when `pytest api/` ran and `api/test_app.py` was the first file collected.
+- **Where:** `api/identity.py` → `rbac.roles` → `from ingest.models import SensitivityLevel` → `ingest/__init__.py` → `ingest.pipeline` → `rbac.classifier` → `rbac.roles` (circular).
+- **Root cause:** `ingest/__init__.py` eagerly imported `ingest_pdf` from `ingest.pipeline`. When Python was loading `rbac.roles` (triggered by `api.identity`) and hit `from ingest.models import SensitivityLevel`, it initialized the `ingest` package, which ran `ingest/__init__.py`, which loaded `ingest.pipeline`, which loaded `rbac.classifier`, which tried to import `Role` from `rbac.roles` — which was still mid-initialization. The existing Phase 2 tests passed because they loaded `rbac.roles` via a path where `ingest.models` was already in `sys.modules` before `ingest.pipeline` was needed.
+- **Fix:** Removed `from ingest.pipeline import ingest_pdf` from `ingest/__init__.py`. No external code used `from ingest import ingest_pdf` — all call sites import from `ingest.pipeline` directly. Added a WHY-comment explaining the removal.
+- **Fallback / prevention:** The guard is: never eagerly import modules in `__init__.py` that form a cross-module import cycle. Any future `__init__.py` re-export should be checked for cycles if it involves `ingest.pipeline` or `rbac.*`.
+- **Status:** Resolved.
+
+### [2026-06-13] Phase 3 — FastAPI 422 on pydantic models defined inside create_app closure
+- **Symptom:** All POST endpoints returned 422 with `{'loc': ['query', 'body'], 'msg': 'Field required', 'input': None}`. FastAPI treated `body: LoginRequest` as a query parameter named "body" rather than the request body.
+- **Where:** `api/app.py` `create_app()` — pydantic models (`LoginRequest`, `QueryRequest`, etc.) were defined inside the factory function.
+- **Root cause:** FastAPI's type introspection resolves parameter types at route registration time. Classes defined inside a function closure are not reliably resolved by the dependency injection machinery — FastAPI fell back to treating them as query parameters.
+- **Fix:** Moved all pydantic request/response models to module level (outside `create_app`). Added a WHY-comment explaining the requirement.
+- **Fallback / prevention:** FastAPI pydantic models must always be defined at module level, not inside factory functions or closures.
 - **Status:** Resolved.
 
 ### [TEMPLATE — copy for each incident]

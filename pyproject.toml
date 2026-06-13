@@ -18,12 +18,15 @@ dependencies = [
     # API + validation
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.30.0",
-    "pydantic>=2.7.0",
+    "pydantic[email]>=2.7.0",
     "pydantic-settings>=2.3.0",
     # Observability
     "structlog>=24.2.0",
     # HTTP client (NIM health checks)
     "httpx>=0.27.0",
+    # Auth — password hashing (slow argon2/bcrypt) + JWT
+    "passlib[argon2]>=1.7.4",
+    "python-jose[cryptography]>=3.3.0",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +42,9 @@ dev = [
     "respx==0.23.1",
     # stubs
     "types-requests>=2.32.0",
+    "types-passlib>=1.7.0",
+    # FastAPI TestClient
+    "httpx>=0.27.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -90,6 +96,8 @@ module = [
     "rank_bm25.*",
     "httpx.*",
     "respx.*",
+    "passlib.*",
+    "jose.*",
 ]
 ignore_missing_imports = true
 
