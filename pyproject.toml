@@ -28,14 +28,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.2.0",
-    "pytest-asyncio>=0.23.0",
-    "mypy>=1.10.0",
-    "ruff>=0.4.0",
+    "pytest==9.0.3",
+    "pytest-asyncio==1.4.0",
+    "mypy==2.1.0",
+    "ruff==0.15.17",
     # PDF fixture generation for ingest tests
     "fpdf2>=2.7.0",
     # httpx mocking for NIM client tests
-    "respx>=0.21.0",
+    "respx==0.23.1",
     # stubs
     "types-requests>=2.32.0",
 ]

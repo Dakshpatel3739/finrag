@@ -166,7 +166,7 @@ def parse_pdf(path: str | Path) -> ParsedDoc:
         if item_type == "TableItem":
             # Export table as Markdown — preserves row/column structure
             try:
-                md_table = item.export_to_markdown()
+                md_table = item.export_to_markdown()  # type: ignore[attr-defined]
             except Exception:
                 md_table = item.text if hasattr(item, "text") else "[table]"
 
