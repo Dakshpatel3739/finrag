@@ -10,6 +10,32 @@
 
 ---
 
+## CHANGELOG
+
+### [2026-06-13] Phase 4a — automated RBAC leak suite + golden QA dataset and loader (Phase 4a COMPLETE)
+- **What:** Full eval/ subsystem for Phase 4a.
+  - `eval/__init__.py`, `eval/errors.py` (`EvalDatasetError`, `EvalLeakError`), `eval/models.py` (`GoldenQA` pydantic v2), `eval/loader.py` (`load_golden_qa` with line-number errors and structlog).
+  - `eval/golden/__init__.py`, `eval/golden/golden_qa.jsonl` (10 QA pairs from NVIDIA FY2024 10-K: 6 public, 2 internal, 2 restricted; only `nvda-rev-fy2024` is verified; all others tagged `needs-verification`), `eval/golden/test_dataset.py` (9 CI-safe schema/loader tests).
+  - `eval/leak_suite/__init__.py`, `eval/leak_suite/seeder.py` (`LeakTestCorpus` with 9 chunks across 2 orgs + inconsistent chunk), `eval/leak_suite/conftest.py` (pytest fixtures), `eval/leak_suite/test_rbac_leaks.py` (20 adversarial security tests covering all 6 required adversarial cases).
+  - `docs/adr/ADR-009-eval-leak-suite-and-golden-dataset.md`.
+- **Why:** Phase 4a eval slice — security-first. The leak suite proves the RBAC filter is CI-blocking and deterministic. RAGAS (Phase 4b) requires an LLM judge and is explicitly deferred.
+- **Security invariants asserted (20 new tests, all CI-blocking):**
+  - Case 1 Positive: OWNER/FINANCE retrieve restricted; ALL roles retrieve public/internal.
+  - Case 2 Negative: HR and EMPLOYEE retrieve zero restricted chunks across 3 query phrasings each.
+  - Case 2 BM25 side-channel: 5 lexical-overlap queries (words verbatim from restricted text) return zero restricted chunks for HR/EMPLOYEE.
+  - Case 3 Cross-tenant: all 4 acme roles × globex = zero leaks; globex/OWNER × acme = zero leaks.
+  - Case 4 Defense-in-depth: inconsistent chunk (sensitivity=public, allowed_roles=owner+finance) blocked for hr/employee; accessible for owner/finance.
+  - Case 5 Empty-result safety: nonexistent org → empty results → fallback answer → `generate` never called → no restricted text in answer.
+  - Case 6 Filter-bypass: 7 prompt-injection query phrasings for acme/HR return zero restricted and zero globex chunks.
+  - Context-window proof: `build_rag_prompt` capture confirms restricted chunk_ids never assembled into LLM context for HR.
+  - Exhaustive role × restricted matrix: all 4 roles checked in one test.
+- **No new dependencies added.** RAGAS is NOT added in this slice (deferred to 4b per ADR-009).
+- **Files:** eval/__init__.py, eval/errors.py, eval/models.py, eval/loader.py, eval/golden/__init__.py, eval/golden/golden_qa.jsonl, eval/golden/test_dataset.py, eval/leak_suite/__init__.py, eval/leak_suite/seeder.py, eval/leak_suite/conftest.py, eval/leak_suite/test_rbac_leaks.py, docs/adr/ADR-009*.
+- **Test result:** 266 passed, 7 deselected (slow), 7 warnings. +30 new tests (20 leak suite + 9 dataset + 1 loader). Coverage: 91%. ruff: clean. mypy --strict: clean (67 source files).
+- **No incidents.**
+
+---
+
 ## INCIDENTS
 
 ### [2026-06-13] CI red on main push — Docker job references non-existent Phase 5 Dockerfile
