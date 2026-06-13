@@ -12,6 +12,19 @@
 
 ## INCIDENTS
 
+### [2026-06-13] CI red on chore/fix-ci — pytest-cov undeclared + pymilvus[milvus_lite] missing
+
+- **Symptom:** CI failed on the pytest step with `pytest: error: unrecognized arguments: --cov=. --cov-report=term-missing` (exit code 4). The `--cov` flags require the `pytest-cov` plugin, which was not declared in `pyproject.toml dev` dependencies. CI only installs declared deps; the flag was silently available locally because `pytest-cov` was installed globally on the dev machine. Additionally, a fresh-venv simulation revealed `ModuleNotFoundError: No module named 'milvus_lite'` because `pyproject.toml` declared `pymilvus>=2.4.0` but not the `[milvus_lite]` extra that bundles Milvus Lite.
+- **Root cause:** Two undeclared dependencies — same local/CI drift class as the ruff version pin issue, but *missing deps* rather than *version mismatch*: (1) `pytest-cov` used in CI yaml but absent from `[project.optional-dependencies].dev`; (2) `pymilvus` declared without `[milvus_lite]` extra so the Lite in-process store was missing in clean environments. Both were masked locally by globally-installed packages.
+- **Additional finding:** `pymilvus 3.0` calls `load_dotenv()` at module import time (in `pymilvus/settings.py`), which reads `.env` from CWD and can pick up `MILVUS_URI=milvus_finrag.db`. On CI, `.env` is gitignored and absent, so this is not an issue. Local devs should be aware.
+- **Fix:** Added `pytest-cov==7.1.0` (exact pin, matching local version) and changed `pymilvus>=2.4.0` → `pymilvus[milvus_lite]>=2.4.0` in `pyproject.toml`.
+- **Prevention:** Fresh-venv simulation before every CI change: `python -m venv /tmp/ci_venv && /tmp/ci_venv/bin/pip install -e ".[dev]" && run all four CI commands in that venv`. This catches undeclared deps that global installs mask.
+- **Verification (clean venv, Python 3.12, no .env):**
+  - `ruff check .` → All checks passed
+  - `ruff format --check .` → 51 files already formatted
+  - `mypy --strict .` → Success: no issues found in 51 source files
+  - `pytest -m "not slow" --cov=. --cov-report=term-missing` → 199 passed, 7 deselected, TOTAL 90% coverage
+
 ### [2026-06-13] CI red on main — ruff version drift (RUF059 + collateral issues)
 
 - **Symptom:** CI failed on `ruff check .` with 4 `RUF059` (`unused-unpacked-variable`) errors in `rbac/test_adversarial_leaks.py` at lines 200, 230, 256, 491: `corpus` unpacked from `rbac_store_and_index` but never used in those 4 tests. Local `ruff check` passed silently because local ruff was an older version that didn't enforce RUF059.
