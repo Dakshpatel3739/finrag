@@ -10,7 +10,47 @@
 
 ---
 
+## INCIDENTS
+
+### [2026-06-13] CI red on chore/fix-ci — pytest-cov undeclared + pymilvus[milvus_lite] missing
+
+- **Symptom:** CI failed on the pytest step with `pytest: error: unrecognized arguments: --cov=. --cov-report=term-missing` (exit code 4). The `--cov` flags require the `pytest-cov` plugin, which was not declared in `pyproject.toml dev` dependencies. CI only installs declared deps; the flag was silently available locally because `pytest-cov` was installed globally on the dev machine. Additionally, a fresh-venv simulation revealed `ModuleNotFoundError: No module named 'milvus_lite'` because `pyproject.toml` declared `pymilvus>=2.4.0` but not the `[milvus_lite]` extra that bundles Milvus Lite.
+- **Root cause:** Two undeclared dependencies — same local/CI drift class as the ruff version pin issue, but *missing deps* rather than *version mismatch*: (1) `pytest-cov` used in CI yaml but absent from `[project.optional-dependencies].dev`; (2) `pymilvus` declared without `[milvus_lite]` extra so the Lite in-process store was missing in clean environments. Both were masked locally by globally-installed packages.
+- **Additional finding:** `pymilvus 3.0` calls `load_dotenv()` at module import time (in `pymilvus/settings.py`), which reads `.env` from CWD and can pick up `MILVUS_URI=milvus_finrag.db`. On CI, `.env` is gitignored and absent, so this is not an issue. Local devs should be aware.
+- **Fix:** Added `pytest-cov==7.1.0` (exact pin, matching local version) and changed `pymilvus>=2.4.0` → `pymilvus[milvus_lite]>=2.4.0` in `pyproject.toml`.
+- **Prevention:** Fresh-venv simulation before every CI change: `python -m venv /tmp/ci_venv && /tmp/ci_venv/bin/pip install -e ".[dev]" && run all four CI commands in that venv`. This catches undeclared deps that global installs mask.
+- **Verification (clean venv, Python 3.12, no .env):**
+  - `ruff check .` → All checks passed
+  - `ruff format --check .` → 51 files already formatted
+  - `mypy --strict .` → Success: no issues found in 51 source files
+  - `pytest -m "not slow" --cov=. --cov-report=term-missing` → 199 passed, 7 deselected, TOTAL 90% coverage
+
+### [2026-06-13] CI red on main — ruff version drift (RUF059 + collateral issues)
+
+- **Symptom:** CI failed on `ruff check .` with 4 `RUF059` (`unused-unpacked-variable`) errors in `rbac/test_adversarial_leaks.py` at lines 200, 230, 256, 491: `corpus` unpacked from `rbac_store_and_index` but never used in those 4 tests. Local `ruff check` passed silently because local ruff was an older version that didn't enforce RUF059.
+- **Root cause:** Version drift — dev tools were pinned only with `>=` lower bounds (`ruff>=0.4.0`, `mypy>=1.10.0`, `pytest>=8.2.0`). CI installed `ruff==0.15.17` which added RUF059. Local installs were older. RUF059 was introduced in ruff 0.15.x; the gap went undetected until CI upgraded. Additionally, CI yaml had `DEPLOY_MODE: dev` (invalid; must be `hosted` or `self_hosted`) and `JWT_SECRET: ci-test-secret` (14 chars; minimum is 32 bytes), which would have caused `pytest` to fail on collection even if ruff passed.
+- **Fix:**
+  1. Renamed `corpus` → `_corpus` at the 4 offending unpack sites (lines 200, 230, 256, 491). The 8 other unpack sites that DO use `corpus` were left unchanged.
+  2. Pinned all dev tool versions to exact CI versions: `ruff==0.15.17`, `mypy==2.1.0`, `pytest==9.0.3`, `pytest-asyncio==1.4.0`, `respx==0.23.1`. Eliminates drift by making local and CI installs identical.
+  3. Fixed CI env vars: `DEPLOY_MODE: dev` → `hosted`; `JWT_SECRET` padded to 52 chars (≥ 32 required).
+  4. Added explicit `-m "not slow"` to CI pytest step (addopts in pyproject.toml already covered it, but explicit is safer against future config drift).
+  5. Added `# type: ignore[attr-defined]` to `ingest/parser.py:169` — Docling's `NodeItem` stubs don't expose the `TableItem.export_to_markdown()` subclass method; the surrounding `try/except` guards it at runtime. This was a pre-existing latent mypy 2.1.0 hit.
+- **Prevention:** Exact-version pins (`==`) in `[project.optional-dependencies].dev`. Everyone who runs `pip install -e ".[dev]"` gets the EXACT same binaries CI uses. Version drift is structurally impossible once reinstalled.
+- **Final CI command results (local, pinned versions, 51 source files on chore/fix-ci):**
+  - `ruff check .` → All checks passed
+  - `ruff format --check .` → 51 files already formatted
+  - `mypy --strict .` → Success: no issues found in 51 source files
+  - `pytest -m "not slow"` → 199 passed, 7 deselected, 4 warnings
+
+---
+
 ## CHANGELOG
+
+### [2026-06-13] chore/fix-ci — ruff RUF059 fix + dev-tool version pinning
+- **What:** Fixed 4 `RUF059` errors in `rbac/test_adversarial_leaks.py` (unused `corpus` → `_corpus`); pinned dev tool versions to exact versions matching CI; fixed broken CI env vars (`DEPLOY_MODE`, `JWT_SECRET`); added explicit `-m "not slow"` to CI pytest step; fixed latent mypy 2.1.0 `attr-defined` in `ingest/parser.py`.
+- **Why:** CI was red on main due to ruff version drift — unpinned `>=` allowed CI to pick up ruff 0.15.17 which enforces RUF059; local was older and silent. Pinning dev tools makes local == CI structurally.
+- **Files:** `rbac/test_adversarial_leaks.py`, `pyproject.toml`, `.github/workflows/ci.yml`, `ingest/parser.py`, `CLAUDE_CHANGES.md`.
+- **Test result:** 199 passed, 7 deselected (slow), 4 warnings. ruff: clean. mypy --strict: clean (51 source files).
 
 ### [2026-06-13] Phase 2 — chunk-level RBAC enforced at retrieval time (Phase 2 COMPLETE)
 - **What:** Full chunk-level RBAC with dual-axis enforcement (org_id tenant isolation + role allowlist). New: `rbac/roles.py` (Role StrEnum, `_POLICY` dict — single source of truth, `sensitivity_to_default_roles`, `can_role_see`); `rbac/classifier.py` (heuristic keyword scanner → SensitivityLevel, `assign_access` stamps org_id + allowed_roles onto every chunk at ingest time); `rbac/filter.py` (`build_rbac_filter` with injection prevention — rejects `"`, `\`, null bytes in org_id). Updated: `ingest/pipeline.py` (removed hard-coded `allowed_roles` param, now calls `assign_access` per chunk); `retrieval/search.py` (added `org_id`+`role` params, builds Milvus filter AND BM25 post-filter via `_passes_rbac`); `generation/answer.py` (passes `org_id`+`role` to `document_search`). 51 new tests: `test_roles.py` (24 tests — exhaustive policy table, all 12 role×sensitivity combinations), `test_filter.py` (15 tests — injection prevention: double-quote, backslash, null byte, empty org_id), `test_adversarial_leaks.py` (12 adversarial security tests — zero-leak proofs, prompt injection immunity, BM25 side-channel closure, cross-org isolation). ADR-007.

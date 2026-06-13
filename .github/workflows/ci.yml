@@ -39,9 +39,9 @@ jobs:
           NVIDIA_API_KEY: "nvapi-ci-stub"
           MILVUS_MODE: "lite"
           MILVUS_LITE_DB_PATH: "/tmp/milvus_ci.db"
-          DEPLOY_MODE: "dev"
-          JWT_SECRET: "ci-test-secret"
-        run: pytest --cov=. --cov-report=term-missing
+          DEPLOY_MODE: "hosted"
+          JWT_SECRET: "ci-test-secret-that-is-long-enough-for-hs256-signing"
+        run: pytest -m "not slow" --cov=. --cov-report=term-missing
 
   docker-build:
     name: Docker image build

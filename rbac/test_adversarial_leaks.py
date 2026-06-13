@@ -197,7 +197,7 @@ async def test_hr_cannot_retrieve_globex_chunk(
 
     Assertion: count of globex chunks in results == 0.
     """
-    store, bm25, corpus = rbac_store_and_index
+    store, bm25, _corpus = rbac_store_and_index
     mock_embed.return_value = [_FAKE_VEC]
     mock_rerank.side_effect = lambda _q, chunks, top_n: chunks[:top_n]
 
@@ -227,7 +227,7 @@ async def test_employee_cannot_retrieve_globex_chunk(
 
     Assertion: count of globex chunks in results == 0.
     """
-    store, bm25, corpus = rbac_store_and_index
+    store, bm25, _corpus = rbac_store_and_index
     mock_embed.return_value = [_FAKE_VEC]
     mock_rerank.side_effect = lambda _q, chunks, top_n: chunks[:top_n]
 
@@ -253,7 +253,7 @@ async def test_owner_only_sees_own_org_chunks(
     rbac_store_and_index: tuple[MilvusStore, BM25Index, RBACCorpus],
 ) -> None:
     """acme/OWNER must only receive acme chunks, never globex chunks."""
-    store, bm25, corpus = rbac_store_and_index
+    store, bm25, _corpus = rbac_store_and_index
     mock_embed.return_value = [_FAKE_VEC]
     mock_rerank.side_effect = lambda _q, chunks, top_n: chunks[:top_n]
 
@@ -488,7 +488,7 @@ async def test_empty_results_for_no_matching_org(
     rbac_store_and_index: tuple[MilvusStore, BM25Index, RBACCorpus],
 ) -> None:
     """Querying with an unknown org_id must return no results."""
-    store, bm25, corpus = rbac_store_and_index
+    store, bm25, _corpus = rbac_store_and_index
     mock_embed.return_value = [_FAKE_VEC]
     mock_rerank.side_effect = lambda _q, chunks, top_n: chunks[:top_n]
 
