@@ -25,3 +25,16 @@ class EvalLeakError(Exception):
     Separate from AssertionError so callers can distinguish security policy
     violations (EvalLeakError) from test infrastructure failures.
     """
+
+
+class EvalHarnessError(Exception):
+    """Raised when the RAGAS evaluation harness cannot be initialised.
+
+    Typical causes:
+    - ragas package not installed (install with ``pip install 'finrag[eval-live]'``)
+    - NIM LLM or embedding endpoint unreachable
+    - Golden QA dataset fails schema validation
+
+    Separate from EvalDatasetError so callers can distinguish harness setup
+    failures from dataset content errors.
+    """
