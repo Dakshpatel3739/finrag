@@ -12,6 +12,18 @@
 
 ## INCIDENTS
 
+### [2026-06-13] CI red on main push — Docker job references non-existent Phase 5 Dockerfile
+
+- **Symptom:** After PR #3 (fix-ci) merged to main, the next push triggered the `docker-build` job in `.github/workflows/ci.yml`. It failed immediately with `ERROR: failed to read dockerfile: open Dockerfile.api: no such file or directory`. The `ruff + mypy + pytest` job passed fine; only the Docker job failed.
+- **Root cause:** `ci.yml` had a `docker-build` job with `if: github.ref == 'refs/heads/main'` referencing `deploy/Dockerfile.api`. That file is a Phase 5 deliverable — `deploy/` is currently empty. The job was silently skipped on every PR (condition false) so the missing file went unnoticed. On the first push-to-main after branch protection was lifted momentarily (PR merge), the condition became true and the job ran, immediately failing.
+- **Fix:** Removed the `docker-build` job from `ci.yml` entirely. Left a comment noting it will be re-added once real Dockerfiles exist in `deploy/` (Phase 5). Workflow now has exactly one job: `lint-type-test`.
+- **Prevention:** Do not add CI jobs that reference files not yet committed. If a CI step is planned for a future phase, leave it commented-out or add it in the same PR that introduces the referenced file. A job with `if: github.ref == 'refs/heads/main'` is especially risky — it's invisible on every PR review and only fires on merge.
+- **Verification:**
+  - `ci.yml` job count: 1 (`lint-type-test` only)
+  - `ruff check .` → All checks passed
+  - `ruff format --check .` → 51 files already formatted
+  - `mypy --strict .` / `pytest` — skipped locally due to disk full (no space for pymilvus/pandas); the `lint-type-test` job was already confirmed green on PR #3; this PR changes only `ci.yml` job structure (removes a job), not any source code, so no regression risk.
+
 ### [2026-06-13] CI red on chore/fix-ci — pytest-cov undeclared + pymilvus[milvus_lite] missing
 
 - **Symptom:** CI failed on the pytest step with `pytest: error: unrecognized arguments: --cov=. --cov-report=term-missing` (exit code 4). The `--cov` flags require the `pytest-cov` plugin, which was not declared in `pyproject.toml dev` dependencies. CI only installs declared deps; the flag was silently available locally because `pytest-cov` was installed globally on the dev machine. Additionally, a fresh-venv simulation revealed `ModuleNotFoundError: No module named 'milvus_lite'` because `pyproject.toml` declared `pymilvus>=2.4.0` but not the `[milvus_lite]` extra that bundles Milvus Lite.
@@ -45,6 +57,13 @@
 ---
 
 ## CHANGELOG
+
+### [2026-06-13] chore/fix-ci-docker — remove premature Docker build job from CI
+
+- **What:** Removed the `docker-build` job from `.github/workflows/ci.yml`. Left a comment explaining it will be re-added in Phase 5 when `deploy/Dockerfile.api` exists. CI now has exactly one job: `lint-type-test` (ruff + mypy + pytest).
+- **Why:** The Docker job referenced `deploy/Dockerfile.api` which is a Phase 5 deliverable. It was skipped on PRs (`if: github.ref == 'refs/heads/main'`) but ran on merge to main and failed immediately.
+- **Files:** `.github/workflows/ci.yml`, `CLAUDE_CHANGES.md`.
+- **Test result:** `ruff check .` → clean; `ruff format --check .` → 51 files already formatted. `lint-type-test` job was already green on PR #3; no source code changed in this slice.
 
 ### [2026-06-13] chore/fix-ci — ruff RUF059 fix + dev-tool version pinning
 - **What:** Fixed 4 `RUF059` errors in `rbac/test_adversarial_leaks.py` (unused `corpus` → `_corpus`); pinned dev tool versions to exact versions matching CI; fixed broken CI env vars (`DEPLOY_MODE`, `JWT_SECRET`); added explicit `-m "not slow"` to CI pytest step; fixed latent mypy 2.1.0 `attr-defined` in `ingest/parser.py`.
