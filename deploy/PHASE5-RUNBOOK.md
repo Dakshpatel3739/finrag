@@ -9,7 +9,7 @@ This runbook is ordered for a one-day GPU proof: apply infrastructure, capture e
 | Guardrail | Time | Rough cost |
 |---|---:|---:|
 | Set a calendar alarm for teardown before creating the cluster. | 1 min | $0 |
-| Keep GPU node group at `maxSize: 3`. | 1 min | Avoids runaway GPU spend |
+| Keep GPU node group at `maxSize: 2` (fits 8 vCPU quota = 2x g5.xlarge). | 1 min | Caps GPU spend; avoids failed 3rd-node scale-up |
 | Confirm the final command is ready: `eksctl delete cluster -f deploy/eks/cluster.yaml --wait`. | 1 min | $0 |
 
 ## 1. Prerequisites And NGC Key
@@ -26,8 +26,9 @@ Why: NIM containers and model profiles are gated by NGC access, and the shared N
 ## 2. Create EKS
 
 ```bash
+export AWS_PROFILE=finrag-burst
 eksctl create cluster -f deploy/eks/cluster.yaml
-aws eks update-kubeconfig --region us-east-1 --name finrag-phase5-gpu
+aws eks update-kubeconfig --region ap-south-1 --name finrag-phase5-gpu
 kubectl get nodes -L finrag.io/node-pool,nvidia.com/gpu.product
 ```
 

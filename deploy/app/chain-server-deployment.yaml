@@ -39,7 +39,7 @@ spec:
       containers:
         - name: chain-server
           # Replace with the ECR image built from deploy/app/Dockerfile.chain-server.
-          image: <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/finrag-chain-server:phase5
+          image: <aws-account-id>.dkr.ecr.ap-south-1.amazonaws.com/finrag-chain-server:phase5
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

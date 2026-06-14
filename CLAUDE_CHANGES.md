@@ -12,6 +12,17 @@
 
 ## CHANGELOG
 
+### [2026-06-14] Phase 5 burst — retarget to ap-south-1, fit GPU maxSize to 8-vCPU quota
+- **What:** Retargeted all `deploy/` region references and capped the GPU node group to match the granted AWS quota, ahead of the Phase 5 burst.
+  - AWS G/VT quota for account 265911026784 was granted as 8 vCPU in ap-south-1 (Mumbai) — partial approval of a 12-vCPU request (support case 17814196790888). 8 vCPU = 2x g5.xlarge.
+  - `eks/cluster.yaml` — `region: us-east-1 -> ap-south-1`; `gpu-a10g` node group `maxSize: 3 -> 2` so HPA scale-out stays within quota instead of failing a 3rd-node launch under Locust load; region comments updated.
+  - `PHASE5-RUNBOOK.md` — cost guardrail updated `maxSize: 3 -> 2` with corrected rationale; added `export AWS_PROFILE=finrag-burst` before `eksctl create cluster` so all burst-day commands target account 265 (dry-run revealed eksctl defaulting to the wrong account otherwise); kubeconfig region updated.
+  - `eks/README.md` — `update-kubeconfig` region updated.
+  - `app/chain-server-deployment.yaml` — ECR image region updated.
+- **Why:** Burst day must target the region/account holding the GPU quota, and the node ceiling must fit the 8-vCPU grant or autoscaling fails at the top under load.
+- **Commit:** (amended) chore/cluster-region-quota-fit
+- INCIDENT: None. (Dry-run surfaced eksctl defaulting to the non-burst account; addressed proactively with the AWS_PROFILE guard, not an incident.)
+
 ### [2026-06-14] UI integration — FinRAG web UI added under web/, API client wired to FastAPI chain-server
 - **What:** Brought the Claude Design–exported frontend into the repo under `web/` and wired its API client to the real FastAPI endpoints without modifying any backend code.
   - `web/` — full frontend tree copied from Claude Design export: `ui_kits/finrag-app/` (screens + API client), `components/` (DS primitives), `tokens/` (CSS design tokens), `assets/` (logos), `styles.css`, `_ds_bundle.js`, `_ds_manifest.json`, `readme.md` (DS guide). `_adherence.oxlintrc.json` was not copied (DS-internal lint config, not applicable to the repo).
