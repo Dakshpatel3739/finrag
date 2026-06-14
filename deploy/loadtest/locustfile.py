@@ -13,7 +13,6 @@ from typing import Any
 
 from locust import HttpUser, between, task
 
-
 QUESTIONS = [
     "Summarize the main revenue risks in the latest uploaded 10-K.",
     "Which business segment had the strongest margin improvement?",

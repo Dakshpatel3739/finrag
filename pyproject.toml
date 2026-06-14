@@ -74,6 +74,7 @@ include = ["config*", "ingest*", "retrieval*", "rbac*", "generation*", "eval*", 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+extend-exclude = ["deploy"]
 
 [tool.ruff.lint]
 select = [
@@ -99,6 +100,7 @@ ignore = [
 # ── Mypy ────────────────────────────────────────────────────
 [tool.mypy]
 python_version = "3.11"
+exclude = "^deploy/"
 strict = true
 warn_return_any = true
 warn_unused_ignores = true
