@@ -1,0 +1,71 @@
+<!-- @dsCard group="Components" viewport="700x440" name="Citation & Grounding (hero)" subtitle="Inline citations, source chunks, access & confidence" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  body { margin: 0; padding: 22px; background: var(--surface-page); }
+  .wrap { display: grid; grid-template-columns: 1fr 300px; gap: 20px; align-items: start; }
+  .answer { font-size: var(--text-md); line-height: 1.7; color: var(--text-primary); }
+  .sources { display: flex; flex-direction: column; gap: 8px; }
+  .eyebrow { margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<script type="text/babel" data-presets="react">
+const { Citation, SourceCard, AccessBadge, ConfidenceMeter } = window.FinRAGDesignSystem_2f3924;
+
+function Demo() {
+  const [active, setActive] = React.useState(1);
+  return (
+    <div>
+      <div className="wrap">
+        <div>
+          <div className="eyebrow">Cited answer</div>
+          <p className="answer">
+            Operating margin reached{' '}
+            <span className={active===1 ? 'fr-grounded-text fr-grounded-text--active' : 'fr-grounded-text'}>24.1% in fiscal 2024</span>
+            <Citation index={1} active={active===1} onClick={()=>setActive(1)} />, an improvement
+            from{' '}
+            <span className={active===2 ? 'fr-grounded-text fr-grounded-text--active' : 'fr-grounded-text'}>21.8% a year earlier</span>
+            <Citation index={2} active={active===2} onClick={()=>setActive(2)} />. The improvement
+            was driven by{' '}
+            <span className={active===3 ? 'fr-grounded-text fr-grounded-text--active' : 'fr-grounded-text'}>operating leverage on higher revenue</span>
+            <Citation index={3} active={active===3} onClick={()=>setActive(3)} />.
+          </p>
+          <div style={{marginTop:'16px', maxWidth:'200px'}}>
+            <ConfidenceMeter value={0.92} />
+          </div>
+          <div style={{marginTop:'14px', display:'flex', gap:'8px'}}>
+            <AccessBadge level="granted" />
+            <AccessBadge level="restricted" />
+            <AccessBadge level="confidential" />
+            <AccessBadge level="role" role="Finance" />
+          </div>
+        </div>
+        <div className="sources">
+          <div className="eyebrow">Sources</div>
+          <SourceCard refIndex={1} docName="FY2024_10-K.pdf" page={42} score={0.93} access="granted"
+            active={active===1} onClick={()=>setActive(1)}
+            excerpt="Operating margin was <mark>24.1%</mark> for fiscal 2024, compared with 21.8% in the prior fiscal year." />
+          <SourceCard refIndex={2} docName="FY2023_10-K.pdf" page={39} score={0.88} access="granted"
+            active={active===2} onClick={()=>setActive(2)}
+            excerpt="Operating margin of <mark>21.8%</mark> reflected continued investment in R&amp;D." />
+          <SourceCard refIndex={3} docName="FY2024_10-K.pdf" page={41} score={0.86} access="granted"
+            active={active===3} onClick={()=>setActive(3)}
+            excerpt="The gain reflected <mark>operating leverage on higher revenue</mark> and disciplined expense growth." />
+        </div>
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Demo/>);
+</script>
+</body>
+</html>

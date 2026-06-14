@@ -1,0 +1,9 @@
+<svg width="148" height="32" viewBox="0 0 148 32" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="FinRAG">
+  <rect width="32" height="32" rx="7" fill="#2257D6"></rect>
+  <rect x="11" y="9" width="13" height="2.6" rx="1.3" fill="#ffffff"></rect>
+  <rect x="11" y="20.4" width="9" height="2.6" rx="1.3" fill="#ffffff" opacity="0.78"></rect>
+  <path d="M9.3 10.3 V21.7" stroke="#9DC0FF" stroke-width="2.2" stroke-linecap="round"></path>
+  <circle cx="9.3" cy="16" r="2.5" fill="#ffffff"></circle>
+  <circle cx="9.3" cy="16" r="1.05" fill="#2257D6"></circle>
+  <text x="44" y="22" font-family="&#39;IBM Plex Sans&#39;, system-ui, sans-serif" font-size="20" font-weight="600" letter-spacing="-0.01em" fill="#1A2230">Fin<tspan fill="#2257D6">RAG</tspan></text>
+</svg>

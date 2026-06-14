@@ -22,7 +22,7 @@
 | Phase 2 — chunk-level RBAC | ✅ MERGED | #3 | `ARRAY_CONTAINS` Milvus filter + BM25 post-filter + adversarial leak suite. 199 tests. |
 | Phase 3 — JWT auth + multi-tenancy | ✅ MERGED | #5 | Argon2 password hashing, HS256 JWT, `get_current_identity` dependency, org isolation. 236 tests. |
 | Phase 4 — evaluation | ✅ MERGED | #7 leak suite + golden dataset; #8 RAGAS harness, NIM-as-judge, `[eval-live]` optional extra | ~288 tests passing; +22 CI-safe eval tests this phase; live RAGAS tests are `@pytest.mark.slow` (excluded from CI, run via `python -m eval.ragas` against the live NIM). |
-| UI — Claude Design | ⬜ IN PROGRESS | — | Started; login + cited-answer hero first, then dashboard, then owner-only admin panel. Connects to FastAPI. |
+| UI — web integration | ✅ PR OPEN | — | Frontend (Claude Design export) lives in `web/`; `api.js` wired to real FastAPI endpoints with normalize layer. Documents list + admin members list remain mock-only (no list endpoints in backend yet). |
 | Phase 5 — GPU/EKS deployment (burst) | ⬜ NOT STARTED | — | 3 NIMs on EKS via NIM Operator, Milvus on cluster, Prometheus/Grafana/DCGM, HPA, Locust load test. Spin up → capture proof → tear down. |
 | Phase 6 — multimodal v2 (stretch) | ⬜ NOT STARTED | — | Chart images → VLM caption → embed caption as text (`content_type='chart'`). |
 

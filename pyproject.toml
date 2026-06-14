@@ -147,6 +147,15 @@ module = [
 ]
 ignore_errors = true
 
+# ingest.parser uses `# type: ignore[attr-defined]` on TableItem.export_to_markdown()
+# because docling-core stubs differ across versions: older versions (used on CI) lack
+# the method on NodeItem so the ignore is required; newer stubs expose it, making the
+# ignore "unused". Disabling warn_unused_ignores here lets the comment coexist with
+# both stub versions without flip-flopping across releases.
+[[tool.mypy.overrides]]
+module = ["ingest.parser"]
+warn_unused_ignores = false
+
 # ── Pytest ──────────────────────────────────────────────────
 [tool.pytest.ini_options]
 testpaths = ["config", "ingest", "retrieval", "rbac", "generation", "eval", "api"]
