@@ -20,7 +20,7 @@ This folder pre-stages the EKS cluster definition for the Phase 5 GPU proof. It 
 eksctl create cluster -f deploy/eks/cluster.yaml
 
 # eksctl normally writes kubeconfig automatically; this makes the context explicit.
-aws eks update-kubeconfig --region us-east-1 --name finrag-phase5-gpu
+aws eks update-kubeconfig --region ap-south-1 --name finrag-phase5-gpu
 ```
 
 ## Verify Nodes

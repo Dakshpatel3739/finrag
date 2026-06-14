@@ -8,9 +8,9 @@ kind: ClusterConfig
 
 metadata:
   name: finrag-phase5-gpu
-  # us-east-1 is a common default with broad g5 availability. Change this before
-  # apply if your AWS GPU quota was granted in another region.
-  region: us-east-1
+  # ap-south-1 (Mumbai) — region where this account holds its g5 / G-and-VT quota.
+  # Account 265 has 8 vCPU G/VT quota here (2x g5.xlarge).
+  region: ap-south-1
   tags:
     project: finrag
     phase: "5"
@@ -60,7 +60,7 @@ managedNodeGroups:
       - g5.xlarge
     minSize: 1
     desiredCapacity: 1
-    maxSize: 3
+    maxSize: 2
     volumeSize: 200
     labels:
       finrag.io/node-pool: gpu
