@@ -1,0 +1,92 @@
+<!-- @dsCard group="FinRAG App" viewport="1280x800" name="FinRAG App — full click-through" subtitle="Login → grounded cited answer · documents · owner access control" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FinRAG</title>
+<link rel="icon" href="../../assets/logo-mark.svg">
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--surface-page); overflow: hidden; }
+  #root { height: 100vh; }
+  @keyframes frShimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+  /* demo-only: configure backend before loading config.js for a live API */
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React + Babel (pinned) -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<!-- Design system bundle (window.FinRAGDesignSystem_2f3924) -->
+<script src="../../_ds_bundle.js"></script>
+
+<!-- Config + data + API (plain JS) -->
+<script src="config.js"></script>
+<script src="mockData.js"></script>
+<script src="api.js"></script>
+
+<!-- Screens (Babel; publish to window) -->
+<script type="text/babel" data-presets="react" src="Icons.jsx"></script>
+<script type="text/babel" data-presets="react" src="AppHeader.jsx"></script>
+<script type="text/babel" data-presets="react" src="NavSidebar.jsx"></script>
+<script type="text/babel" data-presets="react" src="LoginScreen.jsx"></script>
+<script type="text/babel" data-presets="react" src="QueryScreen.jsx"></script>
+<script type="text/babel" data-presets="react" src="DocumentsScreen.jsx"></script>
+<script type="text/babel" data-presets="react" src="AdminScreen.jsx"></script>
+
+<!-- App orchestration -->
+<script type="text/babel" data-presets="react">
+const { AppHeader, NavSidebar, LoginScreen, QueryScreen, DocumentsScreen, AdminScreen } = window;
+const SESSION_KEY = 'finrag.session';
+const VIEW_KEY = 'finrag.view';
+
+function App() {
+  const [session, setSession] = React.useState(() => {
+    try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch { return null; }
+  });
+  const [view, setView] = React.useState(() => localStorage.getItem(VIEW_KEY) || 'ask');
+
+  function navigate(v) {
+    setView(v);
+    try { localStorage.setItem(VIEW_KEY, v); } catch {}
+  }
+  function signIn(res) {
+    setSession(res);
+    navigate('ask');
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify(res)); } catch {}
+  }
+  function signOut() {
+    setSession(null);
+    try { localStorage.removeItem(SESSION_KEY); } catch {}
+  }
+
+  if (!session) return <LoginScreen onSuccess={signIn} />;
+
+  // Non-owners can never land on the admin view.
+  const safeView = (view === 'admin' && session.role !== 'owner') ? 'ask' : view;
+
+  return (
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+      <AppHeader role={session.role} email={session.email} onSignOut={signOut} />
+      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+        <NavSidebar view={safeView} onNavigate={navigate} role={session.role} />
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          {safeView === 'ask' && <QueryScreen session={session} />}
+          {safeView === 'docs' && <DocumentsScreen />}
+          {safeView === 'admin' && <AdminScreen session={session} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

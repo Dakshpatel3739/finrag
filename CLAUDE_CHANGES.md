@@ -12,6 +12,24 @@
 
 ## CHANGELOG
 
+### [2026-06-14] UI integration — FinRAG web UI added under web/, API client wired to FastAPI chain-server
+- **What:** Brought the Claude Design–exported frontend into the repo under `web/` and wired its API client to the real FastAPI endpoints without modifying any backend code.
+  - `web/` — full frontend tree copied from Claude Design export: `ui_kits/finrag-app/` (screens + API client), `components/` (DS primitives), `tokens/` (CSS design tokens), `assets/` (logos), `styles.css`, `_ds_bundle.js`, `_ds_manifest.json`, `readme.md` (DS guide). `_adherence.oxlintrc.json` was not copied (DS-internal lint config, not applicable to the repo).
+  - `web/ui_kits/finrag-app/config.js` — added `upload` and `adminCreateUser` endpoint entries to the existing map; `apiBaseUrl` already defaulted to `http://localhost:8000` via `window.FINRAG_API_BASE || 'http://localhost:8000'`.
+  - `web/ui_kits/finrag-app/api.js` — full rewrite to wire real backend:
+    - `authedPostJSON` — adds `Authorization: Bearer <token>` header for authenticated calls (`/query`, `/documents/upload`, `/admin/users`).
+    - `normalizeLoginResponse` — maps `{access_token, token_type}` → `{token, role, email}`: decodes JWT payload (client-side, display only) for `role`; echoes the form-submitted `email` (not in JWT or backend response).
+    - `normalizeQueryResponse` — maps `{answer: str, sources: [str]}` → `{segments, sources, grounding}`: `parseAnswerSegments` splits `[N]` citation markers into `{text, sourceRef?}` segments; `normalizeSourcesList` maps source strings to `{ref, docName, page, ...}` objects; `grounding` defaults to `null`; detects `"I cannot answer"` refusal → `{noContext: true}`.
+    - Mock fallback preserved — `allowMockFallback: true` keeps fixture path active when backend is unreachable; mock login shape aligned to real login shape.
+    - `uploadDocument` and `adminCreateUser` functions added for future screen wiring.
+  - `web/README.md` — how to run the frontend, point `apiBaseUrl` at a running chain-server, which endpoints are consumed, mock fallback behavior, normalize layer summary, IBM Plex CDN font dependency note, CI note.
+  - `docs/adr/ADR-011-web-ui-and-api-client-wiring.md` — records: frontend source (Claude Design), location (`web/`), wiring mechanism (`config.js`/`api.js`), normalize layer rationale (components unchanged, field mismatches bridged in `api.js`), no-context detection, two product invariants (grounded-only, unauthorized-invisible) enforced in UI to match backend.
+- **Why:** The backend (Phases 0–4) is complete; the frontend needed to be brought into the repo and pointed at real endpoints so the end-to-end flow (login → ask → cited answer) works with the running chain-server. Frontend-only slice — no backend files modified.
+- **Field-name mismatches bridged:** `access_token`→`token`, absent `role`/`email` from JWT decode + form input, flat `answer: str` → `segments`, `sources: [str]` → source object array, absent `grounding` → `null`. See ADR-011.
+- **Files:** `web/` (full tree), `CLAUDE_CHANGES.md`, `docs/adr/ADR-011*`.
+- **Python CI:** ruff clean, mypy clean (74 source files), 288 tests passed (266 non-ragas + 22 ragas mocked), 7 deselected (slow).
+- **Incident:** one pre-existing mypy error in `ingest/parser.py:169` discovered during CI verification — see INCIDENTS below.
+
 ### [2026-06-13] Phase 4b — RAGAS evaluation harness with NVIDIA NIM as judge (Phase 4b COMPLETE)
 - **What:** Full RAGAS harness under `eval/ragas/`.
   - `eval/ragas/__init__.py` — package declaration.
@@ -61,6 +79,14 @@
 ---
 
 ## INCIDENTS
+
+### [2026-06-14] mypy unused-ignore in ingest/parser.py — docling-core stubs updated
+
+- **Symptom:** `mypy --strict .` reported `Unused "type: ignore" comment [unused-ignore]` at `ingest/parser.py:169` during the UI integration CI verification run. The comment `# type: ignore[attr-defined]` had been explicitly added in Phase 4b (targeting `TableItem.export_to_markdown()` which was absent from docling 2.102.1 stubs).
+- **Root cause:** docling-core 2.82.0 (the peer dep pulled in by docling 2.102.1 locally) updated its type stubs so that `TableItem.export_to_markdown()` is now properly exposed. mypy's `--warn-unused-ignores` (implied by `--strict`) therefore reports the comment as suppressing a non-existent error. The error was pre-existing on main (not introduced by the UI slice); it surfaces now because a newer docling-core was installed locally.
+- **Fix:** Removed the stale `# type: ignore[attr-defined]` comment from `ingest/parser.py:169`. The `try/except Exception` block on lines 169–171 still guards against any runtime AttributeError if the method is unavailable.
+- **Prevention:** When adding `# type: ignore` comments for third-party stubs, note the package version so future reviewers can judge when to remove the comment. Consider a comment like `# type: ignore[attr-defined]  # docling-core <X.Y lacks this stub`.
+- **Status:** Resolved.
 
 ### [2026-06-13] CI red on main push — Docker job references non-existent Phase 5 Dockerfile
 

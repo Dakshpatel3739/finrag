@@ -1,0 +1,19 @@
+/* ============================================================
+   FinRAG Design System — global entry point
+   Consumers link THIS file only. Import order matters:
+   fonts → tokens → base. Keep this file @import lines only.
+   ============================================================ */
+
+@import url('./tokens/fonts.css');
+@import url('./tokens/colors.css');
+@import url('./tokens/typography.css');
+@import url('./tokens/spacing.css');
+@import url('./tokens/elevation.css');
+@import url('./tokens/base.css');
+
+/* Component classes (token-driven; shipped to consumers) */
+@import url('./components/_css/core.css');
+@import url('./components/_css/forms.css');
+@import url('./components/_css/feedback.css');
+@import url('./components/_css/data.css');
+@import url('./components/_css/citation.css');

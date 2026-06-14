@@ -1,0 +1,96 @@
+/* ============================================================
+   FinRAG — Base layer
+   Light, dense, legible defaults. Applies font + color tokens
+   to document elements. Imported last so tokens resolve.
+   ============================================================ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  font-weight: var(--weight-regular);
+  color: var(--text-primary);
+  background: var(--surface-page);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+}
+
+/* Financial figures default to tabular, lining numerals */
+.num, [data-num], .font-data {
+  font-family: var(--font-data);
+  font-feature-settings: var(--num-tabular);
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: var(--tracking-snug);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-snug);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+p { margin: 0; text-wrap: pretty; }
+
+a {
+  color: var(--text-link);
+  text-decoration: none;
+}
+a:hover { text-decoration: underline; }
+
+/* Uppercase eyebrow / section label utility */
+.eyebrow {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+/* Quoted document excerpt — serif, from the source */
+.excerpt {
+  font-family: var(--font-quote);
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  color: var(--text-secondary);
+}
+
+::selection {
+  background: var(--blue-100);
+  color: var(--slate-900);
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--ring-shadow);
+  border-color: var(--border-focus);
+}
+
+/* Thin, unobtrusive scrollbars for dense panels */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--slate-300) transparent;
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: var(--slate-300);
+  border-radius: var(--radius-pill);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--slate-400); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

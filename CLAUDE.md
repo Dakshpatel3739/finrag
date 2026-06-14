@@ -48,5 +48,6 @@ These exist because CI passed locally but failed on GitHub four times. Follow th
 | 2 | CI exit 4, unrecognized `--cov` args | `pytest-cov` undeclared | declare + pin pytest-cov |
 | 3 | clean-venv ModuleNotFoundError milvus_lite | `pymilvus` missing `[milvus_lite]` extra | declare pymilvus[milvus_lite] |
 | 4 | main CI red, Docker job missing Dockerfile.api | premature Docker job (Phase-5 file) | remove Docker job until Phase 5 |
+| 5 | mypy unused-ignore in ingest/parser.py | docling-core stubs updated; `# type: ignore[attr-defined]` no longer suppresses anything | remove stale comment |
 
 The full per-incident detail (symptom, root cause, fix, prevention) lives in CLAUDE_CHANGES.md. When you hit a NEW CI failure, add it to both the CLAUDE_CHANGES.md incident log AND this table.
