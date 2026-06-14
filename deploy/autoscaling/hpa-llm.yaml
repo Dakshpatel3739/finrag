@@ -1,0 +1,53 @@
+# HPA for the LLM NIM.
+# WHAT: scales the operator-created Deployment for llama-3.1-8b-instruct.
+# WHY: proof must show GPU/custom-metric autoscaling, not CPU autoscaling.
+#
+# Five-step custom metrics chain:
+# 1. Prometheus scrapes DCGM exporter and NIM ServiceMonitors.
+# 2. Prometheus Adapter pulls DCGM_FI_DEV_GPU_UTIL from Prometheus.
+# 3. Adapter registers gpu_utilization at custom.metrics.k8s.io.
+# 4. HPA reads gpu_utilization for NIM pods.
+# 5. HPA scales the NIM Deployment, which schedules more GPU pods.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: llama-3-1-8b-instruct-gpu
+  namespace: nim-service
+  labels:
+    app.kubernetes.io/part-of: finrag
+    finrag.io/nim-role: llm
+spec:
+  scaleTargetRef:
+    # The NIM Operator creates a Deployment with the NIMService name. If a future
+    # operator version reconciles replicas back to spec.replicas, move this HPA
+    # config into NIMService.spec.scale instead.
+    apiVersion: apps/v1
+    kind: Deployment
+    name: llama-3-1-8b-instruct
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          # Registered by deploy/observability/prometheus-adapter-values.yaml.
+          name: gpu_utilization
+        target:
+          type: AverageValue
+          # DCGM_FI_DEV_GPU_UTIL is a 0-100 percentage. Scale when average pod
+          # GPU utilization holds around 70 percent.
+          averageValue: "70"
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+    scaleDown:
+      # WHY: avoid immediate scale-down before screenshots capture the effect.
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

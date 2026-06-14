@@ -1,0 +1,110 @@
+# NIMCache resources for FinRAG Phase 5.
+# WHAT: each CR downloads one NIM model profile from NGC into the shared RWX PVC.
+# WHY: when HPA creates more replicas, pods reuse the model cache instead of
+# downloading the same model on every scale event.
+---
+apiVersion: apps.nvidia.com/v1alpha1
+kind: NIMCache
+metadata:
+  name: llama-3-1-8b-instruct
+  namespace: nim-service
+  labels:
+    app.kubernetes.io/part-of: finrag
+    finrag.io/nim-role: llm
+spec:
+  source:
+    ngc:
+      # WHAT: modelPuller is the NIM image used by the cache job.
+      # WHY: use the same repository/tag as the runtime NIMService.
+      modelPuller: nvcr.io/nim/meta/llama-3.1-8b-instruct:1.3.3
+      pullSecret: ngc-secret
+      authSecret: ngc-api-secret
+      model:
+        # WHY: g5.xlarge has one A10G, so tensor parallelism stays at 1.
+        engine: tensorrt_llm
+        tensorParallelism: "1"
+        # Optional burst-day hardening:
+        # profiles:
+        #   - "<profile-hash-from-status.profiles>"
+  storage:
+    pvc:
+      # WHAT: reuse the PVC created in deploy/storage/pvc.yaml.
+      # WHY: the PVC is EFS/RWX so replicas across nodes can mount one cache.
+      create: false
+      name: finrag-nim-model-cache
+      subPath: llama-3-1-8b-instruct
+  resources: {}
+  nodeSelector:
+    finrag.io/node-pool: gpu
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+---
+apiVersion: apps.nvidia.com/v1alpha1
+kind: NIMCache
+metadata:
+  name: nv-embedqa-e5-v5
+  namespace: nim-service
+  labels:
+    app.kubernetes.io/part-of: finrag
+    finrag.io/nim-role: embedding
+spec:
+  source:
+    ngc:
+      # WHAT: NVIDIA Retrieval QA E5 embedding NIM.
+      # WHY: this matches FinRAG's dense retrieval model identifier.
+      modelPuller: nvcr.io/nim/nvidia/nv-embedqa-e5-v5:1.0.1
+      pullSecret: ngc-secret
+      authSecret: ngc-api-secret
+      model:
+        # Embedding and reranking NIMs use TensorRT profiles rather than TRT-LLM.
+        engine: tensorrt
+        tensorParallelism: "1"
+  storage:
+    pvc:
+      create: false
+      name: finrag-nim-model-cache
+      subPath: nv-embedqa-e5-v5
+  resources: {}
+  nodeSelector:
+    finrag.io/node-pool: gpu
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+---
+apiVersion: apps.nvidia.com/v1alpha1
+kind: NIMCache
+metadata:
+  name: nv-rerankqa-mistral-4b-v3
+  namespace: nim-service
+  labels:
+    app.kubernetes.io/part-of: finrag
+    finrag.io/nim-role: reranking
+spec:
+  source:
+    ngc:
+      # WHAT: NVIDIA Retrieval QA Mistral 4B reranking NIM.
+      # WHY: this is the cross-encoder step after hybrid RRF retrieval.
+      modelPuller: nvcr.io/nim/nvidia/nv-rerankqa-mistral-4b-v3:1.0.2
+      pullSecret: ngc-secret
+      authSecret: ngc-api-secret
+      model:
+        engine: tensorrt
+        tensorParallelism: "1"
+  storage:
+    pvc:
+      create: false
+      name: finrag-nim-model-cache
+      subPath: nv-rerankqa-mistral-4b-v3
+  resources: {}
+  nodeSelector:
+    finrag.io/node-pool: gpu
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Equal
+      value: "true"
+      effect: NoSchedule

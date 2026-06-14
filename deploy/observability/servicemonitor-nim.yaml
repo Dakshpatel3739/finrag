@@ -1,0 +1,71 @@
+# Explicit ServiceMonitors for FinRAG NIMs.
+# WHAT: asks kube-prometheus-stack to scrape NIM metrics endpoints.
+# WHY: NIMService can generate ServiceMonitors when spec.metrics.enabled=true,
+# but this file is kept as a reviewable fallback if operator labels change.
+#
+# Before applying, verify generated service labels:
+# kubectl get svc -n nim-service --show-labels
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: finrag-nim-llm
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: finrag
+spec:
+  namespaceSelector:
+    matchNames:
+      - nim-service
+  selector:
+    matchLabels:
+      # WHY: expected label from operator-managed service. Adjust after
+      # `kubectl get svc --show-labels` if the operator version differs.
+      app.kubernetes.io/name: llama-3-1-8b-instruct
+  endpoints:
+    - interval: 15s
+      path: /metrics
+      targetPort: 8000
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: finrag-nim-embed
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: finrag
+spec:
+  namespaceSelector:
+    matchNames:
+      - nim-service
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nv-embedqa-e5-v5
+  endpoints:
+    - interval: 15s
+      # Non-LLM NIMs may expose Triton metrics on a separate metricsPort. If so,
+      # change targetPort after inspecting the generated Service.
+      path: /metrics
+      targetPort: 8000
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: finrag-nim-rerank
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: finrag
+spec:
+  namespaceSelector:
+    matchNames:
+      - nim-service
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nv-rerankqa-mistral-4b-v3
+  endpoints:
+    - interval: 15s
+      path: /metrics
+      targetPort: 8000
