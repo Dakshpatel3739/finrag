@@ -80,12 +80,13 @@
 
 ## INCIDENTS
 
-### [2026-06-14] mypy unused-ignore in ingest/parser.py — docling-core stubs updated
+### [2026-06-14] CI red on PR #10 — mypy attr-defined on ingest/parser.py (docling stub drift, local vs CI)
 
-- **Symptom:** `mypy --strict .` reported `Unused "type: ignore" comment [unused-ignore]` at `ingest/parser.py:169` during the UI integration CI verification run. The comment `# type: ignore[attr-defined]` had been explicitly added in Phase 4b (targeting `TableItem.export_to_markdown()` which was absent from docling 2.102.1 stubs).
-- **Root cause:** docling-core 2.82.0 (the peer dep pulled in by docling 2.102.1 locally) updated its type stubs so that `TableItem.export_to_markdown()` is now properly exposed. mypy's `--warn-unused-ignores` (implied by `--strict`) therefore reports the comment as suppressing a non-existent error. The error was pre-existing on main (not introduced by the UI slice); it surfaces now because a newer docling-core was installed locally.
-- **Fix:** Removed the stale `# type: ignore[attr-defined]` comment from `ingest/parser.py:169`. The `try/except Exception` block on lines 169–171 still guards against any runtime AttributeError if the method is unavailable.
-- **Prevention:** When adding `# type: ignore` comments for third-party stubs, note the package version so future reviewers can judge when to remove the comment. Consider a comment like `# type: ignore[attr-defined]  # docling-core <X.Y lacks this stub`.
+- **Symptom (round 1 — local):** `mypy --strict .` reported `Unused "type: ignore" comment [unused-ignore]` at `ingest/parser.py:169` locally. Local docling-core 2.82.0 updated its stubs so the `# type: ignore[attr-defined]` comment suppressed nothing. Fix attempt: removed the comment.
+- **Symptom (round 2 — CI):** PR #10 CI red. mypy on CI (Python 3.11, older docling-core via `pip install -e ".[dev]"`) failed with `error: "NodeItem" has no attribute "export_to_markdown" [attr-defined]` at the same line — the removed ignore was still required there.
+- **Root cause:** docling-core stub version drift between local (2.82.0, `export_to_markdown` in stubs) and CI (older version, method absent from stubs). Neither the `# type: ignore[attr-defined]` comment nor its absence works on both versions simultaneously when `warn_unused_ignores = true` globally.
+- **Fix:** Restored `# type: ignore[attr-defined]` on `ingest/parser.py:169`. Added a targeted `[[tool.mypy.overrides]]` for `ingest.parser` with `warn_unused_ignores = false` — so the comment is silently tolerated on newer docling stubs (where it's unused) while still suppressing the `attr-defined` error on older stubs (CI). Pattern mirrors the existing `eval.ragas.*` override approach.
+- **Prevention:** When a `# type: ignore` comment is needed for a third-party library whose stubs differ between versions, add a per-module `warn_unused_ignores = false` override rather than removing the comment. This makes the ignore version-agnostic. Never remove a `# type: ignore` comment without verifying CI (clean venv, same Python) still passes.
 - **Status:** Resolved.
 
 ### [2026-06-13] CI red on main push — Docker job references non-existent Phase 5 Dockerfile
