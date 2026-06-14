@@ -1,0 +1,54 @@
+# Reranking NIMService for FinRAG.
+# WHAT: serves the cross-encoder reranker internally after hybrid retrieval.
+# WHY: reranking improves citation quality before context is sent to the LLM.
+apiVersion: apps.nvidia.com/v1alpha1
+kind: NIMService
+metadata:
+  name: nv-rerankqa-mistral-4b-v3
+  namespace: nim-service
+  labels:
+    app.kubernetes.io/part-of: finrag
+    finrag.io/nim-role: reranking
+spec:
+  image:
+    repository: nvcr.io/nim/nvidia/nv-rerankqa-mistral-4b-v3
+    tag: "1.0.2"
+    pullPolicy: IfNotPresent
+    pullSecrets:
+      - ngc-secret
+  authSecret: ngc-api-secret
+  storage:
+    nimCache:
+      name: nv-rerankqa-mistral-4b-v3
+      # Pin this after verifying the cache profile selected for the burst GPU.
+      profile: ""
+  replicas: 1
+  nodeSelector:
+    finrag.io/node-pool: gpu
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+  resources:
+    limits:
+      nvidia.com/gpu: 1
+  expose:
+    service:
+      # WHY ClusterIP: only the chain-server calls reranking.
+      type: ClusterIP
+      port: 8000
+  metrics:
+    enabled: true
+    serviceMonitor:
+      interval: 15s
+      additionalLabels:
+        release: kube-prometheus-stack
+  startupProbe:
+    enabled: true
+    probe:
+      httpGet:
+        path: /v1/health/ready
+        port: 8000
+      periodSeconds: 10
+      failureThreshold: 120

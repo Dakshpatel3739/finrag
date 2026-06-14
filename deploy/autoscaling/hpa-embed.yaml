@@ -1,0 +1,45 @@
+# HPA for the embedding NIM.
+# WHAT: scales nv-embedqa-e5-v5 with a custom GPU metric.
+# WHY: embedding can become hot during ingest/query fan-out and should prove the
+# same custom-metrics path as the LLM.
+#
+# Chain: Prometheus scrape -> Adapter query -> custom-metrics API registration
+# -> HPA read -> NIM Deployment scale.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nv-embedqa-e5-v5-gpu
+  namespace: nim-service
+  labels:
+    app.kubernetes.io/part-of: finrag
+    finrag.io/nim-role: embedding
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nv-embedqa-e5-v5
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: gpu_utilization
+        target:
+          type: AverageValue
+          # Embedding requests are shorter than LLM generations, so use a
+          # slightly lower target to trigger visible scaling during the proof.
+          averageValue: "65"
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

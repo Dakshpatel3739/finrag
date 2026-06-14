@@ -1,0 +1,39 @@
+# Shared model cache PVC for NIM Operator.
+# WHAT: creates a ReadWriteMany claim that all NIMCache and NIMService pods can
+# mount through subPaths.
+# WHY: HPA scale-out should not download hundreds of GiB repeatedly.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nim-service
+  labels:
+    app.kubernetes.io/part-of: finrag
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: finrag-nim-model-cache
+  namespace: nim-service
+  labels:
+    app.kubernetes.io/part-of: finrag
+    finrag.io/storage-role: nim-model-cache
+spec:
+  # Binding rule 1: storageClassName must exactly match an existing StorageClass.
+  # On EKS this should be an EFS CSI class such as `efs-sc` because EFS supports
+  # ReadWriteMany across nodes.
+  storageClassName: efs-sc
+
+  # Binding rule 2: accessModes must be compatible with the backing PV. NIM HPA
+  # can schedule replicas on different GPU nodes, so RWX is required.
+  accessModes:
+    - ReadWriteMany
+
+  resources:
+    requests:
+      # Binding rule 3: the PVC request must be less than or equal to PV capacity.
+      # Start large enough for one LLM plus embedding/reranking profiles; adjust
+      # after checking exact NGC profile sizes.
+      storage: 300Gi
+
+  # WHY not hostPath: hostPath only exists on one node and fails when NIM pods
+  # move or scale to another GPU node. Use EFS for RWX on EKS.

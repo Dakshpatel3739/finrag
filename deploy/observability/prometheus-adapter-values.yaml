@@ -1,0 +1,41 @@
+# Helm values for prometheus-community/prometheus-adapter.
+# WHAT: maps Prometheus time series into Kubernetes custom.metrics.k8s.io.
+# WHY: HPA cannot read Prometheus directly; it reads the Kubernetes custom
+# metrics API served by this adapter.
+
+prometheus:
+  # kube-prometheus-stack service name from deploy/observability/prometheus-values.yaml.
+  url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local
+  port: 9090
+
+rules:
+  # WHY disabled: broad default rules can create noisy metrics and hide the GPU
+  # metric this proof is designed to demonstrate.
+  default: false
+  custom:
+    - seriesQuery: 'DCGM_FI_DEV_GPU_UTIL{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace:
+            resource: namespace
+          pod:
+            resource: pod
+      name:
+        matches: "^DCGM_FI_DEV_GPU_UTIL$"
+        # WHAT: HPA files read this metric name from custom.metrics.k8s.io.
+        as: gpu_utilization
+      # WHY avg_over_time: smooth short spikes while keeping the HPA responsive
+      # during the Locust ramp.
+      metricsQuery: avg by (<<.GroupBy>>) (avg_over_time(<<.Series>>{<<.LabelMatchers>>}[2m]))
+
+    - seriesQuery: 'DCGM_FI_DEV_FB_USED{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace:
+            resource: namespace
+          pod:
+            resource: pod
+      name:
+        matches: "^DCGM_FI_DEV_FB_USED$"
+        as: gpu_framebuffer_used_bytes
+      metricsQuery: avg by (<<.GroupBy>>) (avg_over_time(<<.Series>>{<<.LabelMatchers>>}[2m]))

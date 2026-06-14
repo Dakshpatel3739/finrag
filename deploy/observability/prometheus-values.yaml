@@ -1,0 +1,68 @@
+# Helm values for prometheus-community/kube-prometheus-stack.
+# WHAT: installs Prometheus, Grafana, Alertmanager CRDs, ServiceMonitor support,
+# kube-state-metrics, and node-exporter.
+# WHY: Phase 5 proof needs screenshots of GPU utilization, pod count, NIM health,
+# and HPA behavior during the Locust run.
+
+fullnameOverride: kube-prometheus-stack
+
+alertmanager:
+  # WHY disabled for the burst: we need dashboards and scraping, not paging.
+  enabled: false
+
+grafana:
+  enabled: true
+  # WHY ClusterIP: Grafana is accessed through kubectl port-forward for proof
+  # screenshots, not exposed publicly.
+  service:
+    type: ClusterIP
+  adminPassword: finrag-change-me
+  defaultDashboardsEnabled: true
+  sidecar:
+    dashboards:
+      enabled: true
+    datasources:
+      enabled: true
+  persistence:
+    # WHY disabled: burst-day data is temporary and exported by screenshots.
+    enabled: false
+
+prometheus:
+  service:
+    type: ClusterIP
+  prometheusSpec:
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+    retention: 12h
+    # WHY: allow ServiceMonitors created outside the Helm release, including
+    # NIM Operator generated monitors and the explicit FinRAG monitors.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorNamespaceSelector: {}
+    podMonitorNamespaceSelector: {}
+    # WHAT: optional direct scrape fallback for DCGM exporter services.
+    # WHY: GPU Operator chart versions differ on whether they create a
+    # ServiceMonitor; this keeps metrics visible for the proof run.
+    additionalScrapeConfigs:
+      - job_name: dcgm-exporter
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - gpu-operator
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name]
+            regex: ".*dcgm.*"
+            action: keep
+          - source_labels: [__meta_kubernetes_endpoint_port_name]
+            regex: ".*metrics.*|http"
+            action: keep
+
+kubeStateMetrics:
+  enabled: true
+
+prometheus-node-exporter:
+  enabled: true
+
+prometheusOperator:
+  enabled: true

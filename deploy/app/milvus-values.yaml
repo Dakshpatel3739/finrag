@@ -1,0 +1,48 @@
+# Helm values for a small on-cluster Milvus proof deployment.
+# WHAT: runs standalone Milvus with etcd and MinIO in the cluster.
+# WHY: Phase 5 needs a real Milvus server instead of Milvus Lite so the
+# chain-server talks to an in-cluster vector store.
+
+cluster:
+  # WHY standalone: cheaper and simpler for a one-day proof.
+  enabled: false
+
+standalone:
+  replicas: 1
+  service:
+    type: ClusterIP
+    port: 19530
+  persistence:
+    enabled: true
+    # gp3 is enough for proof data; increase if indexing full filings.
+    storageClass: gp3
+    size: 100Gi
+  resources:
+    requests:
+      cpu: "1"
+      memory: 4Gi
+    limits:
+      cpu: "2"
+      memory: 8Gi
+
+etcd:
+  replicaCount: 1
+  persistence:
+    enabled: true
+    storageClass: gp3
+    size: 20Gi
+
+minio:
+  mode: standalone
+  persistence:
+    enabled: true
+    storageClass: gp3
+    size: 100Gi
+
+pulsar:
+  # WHY disabled: standalone Milvus can use embedded message storage for proof.
+  enabled: false
+
+attu:
+  # WHY disabled by default: avoid another public/admin surface during burst.
+  enabled: false

@@ -1,0 +1,79 @@
+# eksctl ClusterConfig for the FinRAG Phase 5 GPU burst.
+# WHAT: Creates one managed EKS control plane plus two node groups: a small CPU
+# group for system pods and an autoscaling GPU group for NIM inference.
+# WHY: The expensive GPU capacity is isolated and capped at 3 nodes so the burst
+# day can prove GPU serving, HPA, and observability without leaving cost open.
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: finrag-phase5-gpu
+  # us-east-1 is a common default with broad g5 availability. Change this before
+  # apply if your AWS GPU quota was granted in another region.
+  region: us-east-1
+  tags:
+    project: finrag
+    phase: "5"
+    owner: portfolio
+    cost-safety: delete-same-day
+
+# OIDC is required for AWS Load Balancer Controller, EFS CSI, and other IRSA
+# service accounts used by the deployment docs.
+iam:
+  withOIDC: true
+
+# These add-ons keep the burst cluster close to a normal EKS baseline.
+# WHY EFS CSI: the NIM model cache needs ReadWriteMany storage across nodes.
+addons:
+  - name: vpc-cni
+  - name: coredns
+  - name: kube-proxy
+  - name: aws-ebs-csi-driver
+  - name: aws-efs-csi-driver
+
+managedNodeGroups:
+  - name: system-cpu
+    # Small, inexpensive nodes host CoreDNS, Prometheus, Grafana, Milvus, Locust,
+    # and the chain-server so GPU nodes stay focused on inference pods.
+    instanceTypes:
+      - m6i.large
+    minSize: 1
+    desiredCapacity: 1
+    maxSize: 2
+    volumeSize: 50
+    labels:
+      finrag.io/node-pool: system
+    iam:
+      withAddonPolicies:
+        autoScaler: true
+        cloudWatch: true
+        ebs: true
+        efs: true
+        albIngress: true
+
+  - name: gpu-a10g
+    # g5.xlarge = 1x NVIDIA A10G GPU, 4 vCPU, 16 GiB RAM. It is the smallest g5
+    # shape and is enough to prove one-GPU NIM scheduling and autoscaling.
+    # QUOTA NOTE: request EC2 On-Demand G and VT instances quota before burst day;
+    # a default account often has 0 vCPU quota for g5.
+    instanceTypes:
+      - g5.xlarge
+    minSize: 1
+    desiredCapacity: 1
+    maxSize: 3
+    volumeSize: 200
+    labels:
+      finrag.io/node-pool: gpu
+      nvidia.com/gpu.product: A10G
+    # Taint keeps non-GPU pods off the expensive nodes. NIMService manifests add
+    # the matching toleration so only GPU workloads land here.
+    taints:
+      - key: nvidia.com/gpu
+        value: "true"
+        effect: NoSchedule
+    iam:
+      withAddonPolicies:
+        autoScaler: true
+        cloudWatch: true
+        ebs: true
+        efs: true

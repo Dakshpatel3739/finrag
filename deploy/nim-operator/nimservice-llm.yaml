@@ -1,0 +1,60 @@
+# LLM NIMService for FinRAG.
+# WHAT: serves llama-3.1-8b-instruct on an internal ClusterIP service.
+# WHY: only the chain-server should call the LLM; public ingress stays at the app.
+apiVersion: apps.nvidia.com/v1alpha1
+kind: NIMService
+metadata:
+  name: llama-3-1-8b-instruct
+  namespace: nim-service
+  labels:
+    app.kubernetes.io/part-of: finrag
+    finrag.io/nim-role: llm
+spec:
+  image:
+    repository: nvcr.io/nim/meta/llama-3.1-8b-instruct
+    tag: "1.3.3"
+    pullPolicy: IfNotPresent
+    pullSecrets:
+      - ngc-secret
+  authSecret: ngc-api-secret
+  storage:
+    nimCache:
+      name: llama-3-1-8b-instruct
+      # IMPORTANT: first boot can auto-select a profile based on the A10G.
+      # After cache Ready, verify the hash with NIMCache.status.profiles and
+      # pin it here. A wrong hash can crash the NIM pod.
+      profile: ""
+  replicas: 1
+  nodeSelector:
+    finrag.io/node-pool: gpu
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+  resources:
+    limits:
+      # WHAT: one NIM pod consumes the whole A10G on one g5.xlarge.
+      nvidia.com/gpu: 1
+  expose:
+    service:
+      # WHY ClusterIP: NIMs are internal, never internet exposed.
+      type: ClusterIP
+      port: 8000
+  metrics:
+    enabled: true
+    serviceMonitor:
+      interval: 15s
+      additionalLabels:
+        # WHY: kube-prometheus-stack discovers ServiceMonitors by this label.
+        release: kube-prometheus-stack
+  startupProbe:
+    enabled: true
+    probe:
+      httpGet:
+        path: /v1/health/ready
+        port: 8000
+      periodSeconds: 10
+      # WHY: model download/profile loading can exceed the default readiness
+      # window on first boot; 180 failures gives up to 30 minutes.
+      failureThreshold: 180

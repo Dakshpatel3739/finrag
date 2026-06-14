@@ -1,0 +1,118 @@
+# FinRAG chain-server Deployment.
+# WHAT: runs the FastAPI API inside the EKS cluster.
+# WHY: it is the only backend that should call NIMs and Milvus directly.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: finrag
+  labels:
+    app.kubernetes.io/part-of: finrag
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chain-server
+  namespace: finrag
+  labels:
+    app.kubernetes.io/name: chain-server
+    app.kubernetes.io/part-of: finrag
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: chain-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: chain-server
+        app.kubernetes.io/part-of: finrag
+      annotations:
+        # WHAT: optional scrape hint if app metrics are added later.
+        # WHY: keeps the observability path obvious without exposing the service.
+        prometheus.io/scrape: "false"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: chain-server
+          # Replace with the ECR image built from deploy/app/Dockerfile.chain-server.
+          image: <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/finrag-chain-server:phase5
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: DEPLOY_MODE
+              value: self_hosted
+            - name: NIM_LLM_BASE_URL
+              # WHY: internal DNS points at the LLM NIM ClusterIP service.
+              value: http://llama-3-1-8b-instruct.nim-service.svc.cluster.local:8000/v1
+            - name: NIM_EMBED_BASE_URL
+              value: http://nv-embedqa-e5-v5.nim-service.svc.cluster.local:8000/v1
+            - name: NIM_RERANK_BASE_URL
+              # WHY: appends /reranking in the existing reranker client.
+              value: http://nv-rerankqa-mistral-4b-v3.nim-service.svc.cluster.local:8000/v1/retrieval/nvidia
+            - name: NIM_LLM_MODEL
+              value: meta/llama-3.1-8b-instruct
+            - name: NIM_EMBED_MODEL
+              value: nvidia/nv-embedqa-e5-v5
+            - name: NIM_RERANK_MODEL
+              value: nvidia/rerank-qa-mistral-4b
+            - name: MILVUS_URI
+              # WHAT: Milvus Helm release service inside the milvus namespace.
+              value: http://finrag-milvus.milvus.svc.cluster.local:19530
+            - name: MILVUS_COLLECTION
+              value: finrag_chunks
+            - name: CONFIG_DB_PATH
+              # WHY: SQLite runtime config needs a writable path for non-root.
+              value: /data/finrag_config.db
+            - name: LOG_LEVEL
+              value: INFO
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  # Create with: kubectl create secret generic finrag-api-secret
+                  # --namespace finrag --from-literal=JWT_SECRET="$(openssl rand -hex 32)"
+                  name: finrag-api-secret
+                  key: JWT_SECRET
+            - name: NIM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  # WHY: existing NIM clients expect this setting even when the
+                  # services are internal. Use the same NGC key as NIM Operator.
+                  name: finrag-api-secret
+                  key: NIM_API_KEY
+          volumeMounts:
+            - name: runtime-data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: runtime-data
+          emptyDir: {}

@@ -1,0 +1,56 @@
+# Multi-stage Dockerfile for the FinRAG FastAPI chain-server.
+# WHAT: builds the Python package in a virtualenv, then copies only the venv into
+# a slim runtime image.
+# WHY: keeps the runtime image smaller and runs the API as a non-root user.
+
+FROM python:3.11-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /build
+
+# WHAT: create an isolated venv that can be copied into the runtime stage.
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+
+# WHAT: copy only packaging metadata first for better layer caching.
+COPY pyproject.toml readme.md ./
+
+# WHAT: copy application packages needed by setup.cfg/pyproject package discovery.
+# WHY: no Python source is changed by this Dockerfile; it only packages the app.
+COPY api ./api
+COPY config ./config
+COPY ingest ./ingest
+COPY retrieval ./retrieval
+COPY rbac ./rbac
+COPY generation ./generation
+COPY eval ./eval
+
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install .
+
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:${PATH}"
+
+# WHAT: non-root UID/GID used by the Kubernetes securityContext.
+# WHY: the API does not need root privileges in-cluster.
+RUN groupadd --system --gid 10001 finrag \
+    && useradd --system --uid 10001 --gid 10001 --home-dir /app --shell /usr/sbin/nologin finrag \
+    && mkdir -p /app /data \
+    && chown -R finrag:finrag /app /data
+
+WORKDIR /app
+COPY --from=builder /opt/venv /opt/venv
+
+USER 10001:10001
+
+EXPOSE 8000
+
+# WHAT: api.app exposes a module-level `app`, so no factory flag is needed.
+# WHY: this matches the existing FastAPI entrypoint without adding app code.
+CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]
