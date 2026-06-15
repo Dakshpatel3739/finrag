@@ -13,6 +13,28 @@
 ## CHANGELOG
 
 
+### [2026-06-15] feat(api): Wire /query to real RAG pipeline + cold-boot BM25 bootstrap + demo ingest seed + adversarial RBAC tests
+
+- **What:**
+  - `retrieval/vector_store.py` — `MilvusStore.list_all_chunks(org_id=None)`: scans the Milvus collection with paginated `query()` (16 384 rows/page) and reconstructs `Chunk` objects (embedding=None) for BM25 bootstrap on cold boot.
+  - `api/app.py` — lifespan now opens `MilvusStore`, calls `list_all_chunks()`, builds `BM25Index`, and stashes `store / bm25 / corpus_size` on `app.state`.  Empty-corpus tolerance: `build_bm25_index([])` produces a valid empty index and the app boots.  Store-init failures are caught, logged (`lifespan.store_init_failed`), and the server still yields — `/query` returns a clean 503 rather than crashing startup.  `skip_secret_check=True` (test mode) skips the Milvus bootstrap so tests don't write to `milvus_finrag.db`.
+  - `api/app.py` — module-level `get_store(request)` and `get_bm25(request)` FastAPI dependencies: read from `app.state`, raise HTTP 503 if absent.
+  - `api/app.py` — `QuerySource(BaseModel)` with `doc_name / page_number / chunk_id`. `QueryResponse.sources` changed from `list[str]` to `list[QuerySource]`.
+  - `api/app.py` — `run_query` wired: calls `answer_query(query, store, bm25, org_id=identity.org_id, role=identity.role)`, maps `CitationSource → QuerySource`, passes "I cannot answer" refusal through as-is with empty sources.
+  - `scripts/seed_demo.py` — async seed script (`python -m scripts.seed_demo`) that ingests `data/adani-energy-fy2026.pdf` (RESTRICTED, owner+finance) and `data/adani-energy-internal.pdf` (INTERNAL, all roles) into org `demo-org`. Allowed-roles are NOT hardcoded — derived from the policy table via `ingest_and_store → assign_access → sensitivity_to_default_roles` (single source of truth in `rbac/roles.py`). Guards on missing PDFs. Requires `NIM_API_KEY`, not run in CI.
+  - `api/test_app.py` — updated existing /query tests to patch JWT settings before token creation and inject `get_store`/`get_bm25` via `dependency_overrides`. Added 4 new tests:
+    - (A) `test_query_returns_structured_sources`: verifies `list[QuerySource]` shape with `doc_name/page_number/chunk_id`.
+    - (B) `test_adversarial_rbac_hr_no_restricted_sources`: real Milvus Lite store with restricted/internal chunks; HR token → no restricted `doc_name` in response sources (NIM calls mocked).
+    - (C) `test_identity_invariant_body_fields_ignored`: body `org_id`/`role` fields are ignored; `answer_query` receives token's identity only.
+    - (D) `test_empty_corpus_boot_returns_graceful_refusal`: empty BM25/store → 200 with "cannot answer" shape, not a 500.
+  - `docs/adr/ADR-012-lifespan-state-corpus-scan.md` — ADR recording the cold-boot corpus scan design, empty-corpus tolerance, `get_store`/`get_bm25` dependency pattern, 503-on-uninitialised-state, stale-BM25 trade-off.
+- **Why:** `/query` was a stub returning a placeholder string with 0 sources. The real RAG pipeline (`answer_query`) was wired but had no long-lived `MilvusStore` or `BM25Index` in app state. A cold-booted server had no way to build BM25 because `MilvusStore` had no `list_all_chunks`. This slice completes the end-to-end /query flow.
+- **Files:** `retrieval/vector_store.py`, `api/app.py`, `api/test_app.py`, `scripts/__init__.py`, `scripts/seed_demo.py`, `docs/adr/ADR-012-lifespan-state-corpus-scan.md`, `CLAUDE_CHANGES.md`.
+- **CI:** ruff clean, mypy --strict clean (76 source files), 292 tests passed (up from 288), 7 deselected (slow).
+- INCIDENT: None.
+
+---
+
 ### feat(api): CORS middleware for local dev UI
 
 - Added `CORSMiddleware` to `create_app`, allow-listing `localhost:5500` /

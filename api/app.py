@@ -23,6 +23,14 @@ STARTUP CHECK (JWT_SECRET):
     The app refuses to start (via lifespan) if jwt_secret is the placeholder
     default.  A weak or default secret makes the HS256 signature meaningless.
 
+LIFESPAN STORE BOOTSTRAP:
+    At startup the lifespan opens a MilvusStore and scans the persisted corpus
+    to build an in-memory BM25Index.  This ensures hybrid retrieval's lexical
+    half works on a fresh process, not just right after in-process ingest.
+    The bootstrap tolerates an empty or absent collection — /query will return
+    the graceful "cannot answer" refusal rather than a 500.  If Milvus init
+    fails entirely, the app still boots and /query surfaces a 503.
+
 TODO (refresh tokens):
     The /auth/refresh endpoint is a deliberate scope cut for Phase 3.
     Rationale: access tokens are short-lived (default 30 min / set by
@@ -56,7 +64,10 @@ from api.identity import Identity, get_current_identity
 from api.security import create_access_token
 from api.users import DuplicateUserError, UserStore, get_user_store
 from config.settings import get_settings
+from generation.answer import answer_query
 from rbac.roles import Role
+from retrieval.bm25 import BM25Index, build_bm25_index
+from retrieval.vector_store import MilvusStore
 
 logger: structlog.BoundLogger = structlog.get_logger(__name__)
 
@@ -165,13 +176,62 @@ class QueryRequest(BaseModel):
     question: str = Field(min_length=1)
 
 
+class QuerySource(BaseModel):
+    """A single verified citation source in the query response."""
+
+    doc_name: str
+    page_number: int
+    chunk_id: str
+
+
 class QueryResponse(BaseModel):
     """Query result with org/role echoed from token (never from request)."""
 
     answer: str
     org_id: str
     role: str
-    sources: list[str]
+    sources: list[QuerySource]
+
+
+# ── App-state dependencies ────────────────────────────────────────────────────
+#
+# WHY module-level (not inside create_app):
+#     FastAPI resolves Depends() by function identity.  Defining get_store and
+#     get_bm25 here lets tests override them via
+#     app.dependency_overrides[get_store] = lambda: my_test_store
+#     without needing to re-import from inside the closure.
+
+
+def get_store(request: Request) -> MilvusStore:
+    """Retrieve the long-lived MilvusStore from app.state.
+
+    Raises:
+        HTTPException 503: If the store was not initialised at startup (e.g.
+            Milvus was unavailable when the process booted).  Callers receive
+            a clean error rather than an AttributeError or 500.
+    """
+    store: MilvusStore | None = getattr(request.app.state, "store", None)
+    if store is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Vector store unavailable — Milvus did not initialise at startup.",
+        )
+    return store
+
+
+def get_bm25(request: Request) -> BM25Index:
+    """Retrieve the long-lived BM25Index from app.state.
+
+    Raises:
+        HTTPException 503: If the index was not built at startup.
+    """
+    bm25: BM25Index | None = getattr(request.app.state, "bm25", None)
+    if bm25 is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="BM25 index unavailable — corpus scan did not complete at startup.",
+        )
+    return bm25
 
 
 # ── App factory ───────────────────────────────────────────────────────────────
@@ -182,27 +242,57 @@ def create_app(*, skip_secret_check: bool = False) -> FastAPI:
 
     Args:
         skip_secret_check: Set True in tests to bypass the startup secret
-                           assertion (tests use a local strong secret anyway).
+                           assertion and the Milvus bootstrap (tests inject
+                           store/bm25 via dependency_overrides instead).
     """
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
-        """Run startup validation before accepting requests.
+        """Run startup validation and Milvus + BM25 bootstrap.
 
         WHY in lifespan (not at import time):
             Module-level execution runs during test collection, before test
             fixtures can patch JWT_SECRET.  Lifespan runs only when the
             ASGI server actually starts, allowing tests to create the app
             without triggering the production secret check.
+
+        WHY skip store init when skip_secret_check=True:
+            In test mode, tests inject store/bm25 via dependency_overrides.
+            Bootstrapping a real MilvusStore would write to the default
+            milvus_finrag.db path and slow down the test suite unnecessarily.
         """
         if not skip_secret_check:
             _assert_strong_jwt_secret()
+            try:
+                store = MilvusStore()
+                corpus = store.list_all_chunks()
+                bm25 = build_bm25_index(corpus)
+                _app.state.store = store
+                _app.state.bm25 = bm25
+                _app.state.corpus_size = len(corpus)
+                if len(corpus) == 0:
+                    logger.warning(
+                        "lifespan.empty_corpus",
+                        msg="BM25 index built over empty corpus — ingest has not run yet.",
+                    )
+                else:
+                    logger.info(
+                        "lifespan.store_ready",
+                        corpus_size=len(corpus),
+                    )
+            except Exception as exc:
+                logger.error(
+                    "lifespan.store_init_failed",
+                    error=str(exc),
+                    msg="Milvus bootstrap failed; /query will return 503 until resolved.",
+                )
+                # Do not re-raise — the app boots; /query surfaces a clean 503.
         yield
 
     application = FastAPI(
         title="FinRAG chain-server",
         description="Multi-tenant financial RAG with JWT auth and chunk-level RBAC.",
-        version="0.3.0",
+        version="0.4.0",
         lifespan=lifespan,
     )
 
@@ -368,6 +458,8 @@ def create_app(*, skip_secret_check: bool = False) -> FastAPI:
     async def run_query(
         body: QueryRequest,
         identity: Annotated[Identity, Depends(get_current_identity)],
+        store: Annotated[MilvusStore, Depends(get_store)],
+        bm25: Annotated[BM25Index, Depends(get_bm25)],
     ) -> QueryResponse:
         """Answer a question using RBAC-filtered retrieval.
 
@@ -379,9 +471,6 @@ def create_app(*, skip_secret_check: bool = False) -> FastAPI:
             forge.  A user with an "acme" token CANNOT reach "globex" data
             because there is no request field to specify a different org.
             Isolation is structural, not just a policy check.
-
-        NOTE: Full Milvus retrieval (answer_query) is wired in Phase 4.
-        Phase 3 validates identity derivation and returns a stub response.
         """
         logger.info(
             "query.request",
@@ -390,13 +479,28 @@ def create_app(*, skip_secret_check: bool = False) -> FastAPI:
             role=str(identity.role),  # WHY: from token, not body
             query_preview=body.question[:80],
         )
-        # TODO(Phase 4): wire answer_query(query=body.question, store=..., bm25_index=...,
-        #                org_id=identity.org_id, role=identity.role)
+        result = await answer_query(
+            query=body.question,
+            store=store,
+            bm25_index=bm25,
+            org_id=identity.org_id,  # WHY: from verified JWT, never from body
+            role=identity.role,  # WHY: from verified JWT, never from body
+        )
+        # "I cannot answer" refusal passes through as-is with empty sources.
+        # The web UI detects this phrase and renders its no-context path.
+        sources = [
+            QuerySource(
+                doc_name=s.doc_name,
+                page_number=s.page_number,
+                chunk_id=s.chunk_id,
+            )
+            for s in result.sources
+        ]
         return QueryResponse(
-            answer="Query endpoint wired. Full RAG response available in Phase 4.",
+            answer=result.answer,
             org_id=identity.org_id,  # echoed to prove it comes from token
             role=str(identity.role),  # echoed to prove it comes from token
-            sources=[],
+            sources=sources,
         )
 
     return application
