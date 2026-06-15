@@ -76,16 +76,27 @@ class Settings(BaseSettings):
     )
 
     # ── Milvus ─────────────────────────────────────────────────────────────
-    # In dev use Milvus Lite — point MILVUS_URI at a local .db file path.
+    # In dev use Milvus Lite — point FINRAG_MILVUS_URI at a local .db file path.
     # In production point at your Milvus server: http://milvus-service:19530
+    #
+    # WHY validation_alias instead of the default field-name binding:
+    #   pymilvus calls load_dotenv() at import time and its module-level
+    #   Connections() global reads any env var literally named MILVUS_URI.
+    #   If MILVUS_URI is set to a Milvus Lite file path (e.g. "milvus_finrag.db"),
+    #   pymilvus rejects it at import with ConnectionConfigException because it
+    #   expects an http[s]://... URI.  Using FINRAG_MILVUS_URI avoids the collision.
     milvus_uri: str = Field(
         default="milvus_finrag.db",
+        validation_alias="FINRAG_MILVUS_URI",
         description=(
             "Milvus Lite: path to a local .db file (e.g. 'milvus_finrag.db'). "
             "Milvus server: 'http://host:19530'."
         ),
     )
-    milvus_collection: str = Field(default="finrag_chunks")
+    milvus_collection: str = Field(
+        default="finrag_chunks",
+        validation_alias="FINRAG_MILVUS_COLLECTION",
+    )
 
     # ── Deploy mode ────────────────────────────────────────────────────────
     deploy_mode: DeployMode = Field(
