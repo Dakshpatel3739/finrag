@@ -61,10 +61,14 @@ spec:
               value: nvidia/nv-embedqa-e5-v5
             - name: NIM_RERANK_MODEL
               value: nvidia/rerank-qa-mistral-4b
-            - name: MILVUS_URI
+            - name: FINRAG_MILVUS_URI
               # WHAT: Milvus Helm release service inside the milvus namespace.
+              # WHY FINRAG_ prefix: pymilvus reads any env var named MILVUS_URI
+              # at import time via its module-level Connections() global.  An
+              # http:// URI is accepted by that validator, so the collision is
+              # harmless here — but we rename for consistency with dev/Lite.
               value: http://finrag-milvus.milvus.svc.cluster.local:19530
-            - name: MILVUS_COLLECTION
+            - name: FINRAG_MILVUS_COLLECTION
               value: finrag_chunks
             - name: CONFIG_DB_PATH
               # WHY: SQLite runtime config needs a writable path for non-root.

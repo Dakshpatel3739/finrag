@@ -156,21 +156,36 @@
     return segments.filter((s) => s.text !== '' || s.sourceRef != null);
   }
 
-  // Map backend sources (list of strings, currently []) to the source
-  // object shape the SourceCard component expects.
+  // Map backend sources to the object shape the SourceCard component expects.
   //
-  // When Phase 4 wires answer_query the backend will emit citation strings
-  // like "filename.pdf, page 42 (chunk_id=abc123)". We parse that format;
-  // unknown strings fall back to displaying the raw string as the doc name.
+  // The /query endpoint now returns structured QuerySource objects:
+  //   { doc_name: str, page_number: int, chunk_id: str }
+  // The string branch ("doc_name, page N (chunk_id=...)") is a fallback for
+  // mock fixtures and the older plain-string shape.
   function normalizeSourcesList(sources) {
     return sources.map((s, i) => {
-      const raw = typeof s === 'string' ? s : String(s);
-      // Try to parse "doc_name, page N (chunk_id=...)"
-      const m = raw.match(/^(.+?),\s*page\s*(\d+)/i);
+      let docName, page, chunkId;
+      if (s !== null && typeof s === 'object' && typeof s.doc_name === 'string') {
+        // Structured QuerySource from /query backend
+        docName = s.doc_name;
+        page = typeof s.page_number === 'number' ? s.page_number : null;
+        chunkId = s.chunk_id ?? null;
+      } else if (typeof s === 'string') {
+        // Legacy/mock string: "doc_name, page N (chunk_id=...)"
+        const m = s.match(/^(.+?),\s*page\s*(\d+)/i);
+        docName = m ? m[1].trim() : s;
+        page = m ? parseInt(m[2], 10) : null;
+        chunkId = null;
+      } else {
+        docName = String(s);
+        page = null;
+        chunkId = null;
+      }
       return {
         ref: i + 1,
-        docName: m ? m[1].trim() : raw,
-        page: m ? parseInt(m[2], 10) : null,
+        docName,
+        page,
+        chunkId,
         score: null,
         excerpt: null,
         access: 'granted',

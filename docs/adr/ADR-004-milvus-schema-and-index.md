@@ -146,8 +146,8 @@ is a deliberate operator action (not a code change).
 
 ```bash
 # .env
-MILVUS_URI=http://milvus.internal:19530
-MILVUS_COLLECTION=finrag_chunks
+FINRAG_MILVUS_URI=http://milvus.internal:19530
+FINRAG_MILVUS_COLLECTION=finrag_chunks
 ```
 
 No code changes.  `MilvusStore()` reads the URI from settings.

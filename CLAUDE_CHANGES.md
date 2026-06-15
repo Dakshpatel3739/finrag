@@ -13,6 +13,51 @@
 ## CHANGELOG
 
 
+### [2026-06-15] fix(web): Map structured QuerySource objects in normalizeSourcesList
+
+- **What:** Updated `normalizeSourcesList` in `web/ui_kits/finrag-app/api.js` to handle the structured `{ doc_name, page_number, chunk_id }` objects now returned by the `/query` endpoint (Phase 3 enrichment). The function previously called `String(s)` on each source, producing `"[object Object]"` for every citation. The fix adds a primary branch that reads object fields directly; the original regex-parse logic is preserved as a fallback for mock fixtures that still use the plain-string shape. `chunkId` is now carried through to the return shape for future SourceCard use (no other component touched).
+- **Why:** `/query` was enriched in the same PR (feat/wire-query-rag-pipeline) to return typed `QuerySource` objects; the frontend normalizer was not updated in lockstep, so all citations rendered as "[object Object]" in the UI.
+- **Files:** `web/ui_kits/finrag-app/api.js`, `CLAUDE_CHANGES.md`.
+- **CI:** web/ is excluded from ruff/mypy — no Python lint to run. No incidents.
+
+---
+
+### [2026-06-15] fix(config): Rename MILVUS_URI → FINRAG_MILVUS_URI to prevent pymilvus import-time crash
+
+- **What:**
+  - `config/settings.py` — added `validation_alias="FINRAG_MILVUS_URI"` to the `milvus_uri` field and `validation_alias="FINRAG_MILVUS_COLLECTION"` to `milvus_collection`. Python field names are unchanged; only the env var binding changes. Added WHY-comment inline explaining the collision.
+  - `.env.example` — renamed `MILVUS_URI` → `FINRAG_MILVUS_URI` and `MILVUS_COLLECTION` → `FINRAG_MILVUS_COLLECTION` in both the active settings and all commented examples. Added one-line WHY comment at the top of the Milvus block.
+  - `deploy/app/chain-server-deployment.yaml` — renamed `MILVUS_URI` → `FINRAG_MILVUS_URI` and `MILVUS_COLLECTION` → `FINRAG_MILVUS_COLLECTION`. Added inline WHY comment noting that an `http://` URI would be accepted by pymilvus's validator anyway, but consistency is preferred.
+  - `docs/adr/ADR-004-milvus-schema-and-index.md` — updated the `.env` example in the "switch to real Milvus server" section.
+- **Why:** `pymilvus` calls `load_dotenv()` at import time (in `pymilvus/settings.py`) and its module-level `Connections()` singleton reads `Config.MILVUS_URI = os.getenv("MILVUS_URI", ...)`. When the local `.env` sets `MILVUS_URI=milvus_finrag.db` (a Milvus Lite file path), pymilvus's URI validator rejects it at import with `ConnectionConfigException: Illegal uri: [milvus_finrag.db]` — before `MilvusStore` (which passes the path explicitly to `MilvusClient(uri=...)`) ever runs. CI is unaffected because `.env` is gitignored and absent there. The fix is to stop using the name `MILVUS_URI` in our env configuration so pymilvus never sees our value. `FINRAG_` prefix guarantees no collision.
+- **Files:** `config/settings.py`, `.env.example`, `deploy/app/chain-server-deployment.yaml`, `docs/adr/ADR-004-milvus-schema-and-index.md`, `CLAUDE_CHANGES.md`.
+- **CI:** ruff clean, mypy --strict clean (76 source files). Tests: 292 passed, 7 deselected (slow). See INCIDENT entry below.
+- **Action required:** update your local `.env` — rename `MILVUS_URI` → `FINRAG_MILVUS_URI` and `MILVUS_COLLECTION` → `FINRAG_MILVUS_COLLECTION`. The old names no longer have any effect on FinRAG settings (but `MILVUS_URI` would still be read by pymilvus if present, so remove it).
+
+---
+
+### [2026-06-15] feat(api): Wire /query to real RAG pipeline + cold-boot BM25 bootstrap + demo ingest seed + adversarial RBAC tests
+
+- **What:**
+  - `retrieval/vector_store.py` — `MilvusStore.list_all_chunks(org_id=None)`: scans the Milvus collection with paginated `query()` (16 384 rows/page) and reconstructs `Chunk` objects (embedding=None) for BM25 bootstrap on cold boot.
+  - `api/app.py` — lifespan now opens `MilvusStore`, calls `list_all_chunks()`, builds `BM25Index`, and stashes `store / bm25 / corpus_size` on `app.state`.  Empty-corpus tolerance: `build_bm25_index([])` produces a valid empty index and the app boots.  Store-init failures are caught, logged (`lifespan.store_init_failed`), and the server still yields — `/query` returns a clean 503 rather than crashing startup.  `skip_secret_check=True` (test mode) skips the Milvus bootstrap so tests don't write to `milvus_finrag.db`.
+  - `api/app.py` — module-level `get_store(request)` and `get_bm25(request)` FastAPI dependencies: read from `app.state`, raise HTTP 503 if absent.
+  - `api/app.py` — `QuerySource(BaseModel)` with `doc_name / page_number / chunk_id`. `QueryResponse.sources` changed from `list[str]` to `list[QuerySource]`.
+  - `api/app.py` — `run_query` wired: calls `answer_query(query, store, bm25, org_id=identity.org_id, role=identity.role)`, maps `CitationSource → QuerySource`, passes "I cannot answer" refusal through as-is with empty sources.
+  - `scripts/seed_demo.py` — async seed script (`python -m scripts.seed_demo`) that ingests `data/adani-energy-fy2026.pdf` (RESTRICTED, owner+finance) and `data/adani-energy-internal.pdf` (INTERNAL, all roles) into org `demo-org`. Allowed-roles are NOT hardcoded — derived from the policy table via `ingest_and_store → assign_access → sensitivity_to_default_roles` (single source of truth in `rbac/roles.py`). Guards on missing PDFs. Requires `NIM_API_KEY`, not run in CI.
+  - `api/test_app.py` — updated existing /query tests to patch JWT settings before token creation and inject `get_store`/`get_bm25` via `dependency_overrides`. Added 4 new tests:
+    - (A) `test_query_returns_structured_sources`: verifies `list[QuerySource]` shape with `doc_name/page_number/chunk_id`.
+    - (B) `test_adversarial_rbac_hr_no_restricted_sources`: real Milvus Lite store with restricted/internal chunks; HR token → no restricted `doc_name` in response sources (NIM calls mocked).
+    - (C) `test_identity_invariant_body_fields_ignored`: body `org_id`/`role` fields are ignored; `answer_query` receives token's identity only.
+    - (D) `test_empty_corpus_boot_returns_graceful_refusal`: empty BM25/store → 200 with "cannot answer" shape, not a 500.
+  - `docs/adr/ADR-012-lifespan-state-corpus-scan.md` — ADR recording the cold-boot corpus scan design, empty-corpus tolerance, `get_store`/`get_bm25` dependency pattern, 503-on-uninitialised-state, stale-BM25 trade-off.
+- **Why:** `/query` was a stub returning a placeholder string with 0 sources. The real RAG pipeline (`answer_query`) was wired but had no long-lived `MilvusStore` or `BM25Index` in app state. A cold-booted server had no way to build BM25 because `MilvusStore` had no `list_all_chunks`. This slice completes the end-to-end /query flow.
+- **Files:** `retrieval/vector_store.py`, `api/app.py`, `api/test_app.py`, `scripts/__init__.py`, `scripts/seed_demo.py`, `docs/adr/ADR-012-lifespan-state-corpus-scan.md`, `CLAUDE_CHANGES.md`.
+- **CI:** ruff clean, mypy --strict clean (76 source files), 292 tests passed (up from 288), 7 deselected (slow).
+- INCIDENT: None.
+
+---
+
 ### feat(api): CORS middleware for local dev UI
 
 - Added `CORSMiddleware` to `create_app`, allow-listing `localhost:5500` /
@@ -108,6 +153,15 @@ No incidents.
 ---
 
 ## INCIDENTS
+
+### [2026-06-15] pymilvus import-time crash when MILVUS_URI is a Milvus Lite file path
+
+- **Symptom:** `import pymilvus` (triggered by any module that imports `retrieval.vector_store`) raised `ConnectionConfigException: Illegal uri: [milvus_finrag.db], expected form 'http[s]://...'` immediately — before `MilvusStore.__init__` was ever called. Affected: `uvicorn api.app:app`, `python -m scripts.seed_demo`, and any pytest run when `.env` was present locally. CI was unaffected (no `.env` on CI runner).
+- **Where:** Any local run with `MILVUS_URI=milvus_finrag.db` in `.env`.
+- **Root cause:** `pymilvus/settings.py` calls `load_dotenv()` at module import time, then sets `Config.MILVUS_URI = os.getenv("MILVUS_URI", ...)`. The module-level `connections = Connections()` singleton in `pymilvus/orm/connections.py` immediately calls `__parse_address_from_uri(Config.MILVUS_URI)` — which rejects any non-http URI. Our `MilvusStore` passes the Lite file path explicitly to `MilvusClient(uri=...)` (which handles file paths correctly), but never gets a chance to run because pymilvus crashes first at import.
+- **Fix:** Changed `config/settings.py` to bind `milvus_uri` to env var `FINRAG_MILVUS_URI` (via pydantic-settings `validation_alias`) and `milvus_collection` to `FINRAG_MILVUS_COLLECTION`. `.env.example`, `deploy/` YAML, and the ADR-004 example updated accordingly. User must rename the vars in their local `.env`.
+- **Prevention:** Never use env var names that overlap with library globals. Libraries that call `load_dotenv()` at import (pymilvus, possibly others) pollute the env namespace. The `FINRAG_` prefix isolates all FinRAG config from third-party name collisions. When adding new settings, check whether any dependency reads the same env var name.
+- **Status:** Resolved.
 
 ### [2026-06-14] CI red on PR #10 — mypy attr-defined on ingest/parser.py (docling stub drift, local vs CI)
 

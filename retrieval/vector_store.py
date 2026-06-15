@@ -319,6 +319,89 @@ class MilvusStore:
         result: bool = self._client.has_collection(self._collection_name)
         return result
 
+    def list_all_chunks(self, org_id: str | None = None) -> list[Chunk]:
+        """Return all chunks from the collection, reconstructed for BM25 bootstrap.
+
+        WHY this method exists: the chain-server holds a long-lived BM25Index
+        built from the persisted Milvus corpus so hybrid retrieval's lexical half
+        works on a fresh process (not just right after in-process ingest).  On cold
+        boot the process has no chunk objects in memory; this method scans the
+        collection to retrieve the scalar fields needed to reconstruct them.
+        The embedding field is intentionally excluded — BM25 does not need vectors.
+
+        Args:
+            org_id: If given, return only chunks for this tenant.  Pass None to
+                    return chunks across all orgs (the BM25 bootstrap path — RBAC
+                    post-filtering in document_search enforces access at query time).
+
+        Returns:
+            List of Chunk objects with embedding=None.  Empty list if the
+            collection does not exist.
+        """
+        if not self.collection_exists():
+            return []
+
+        output_fields = [
+            "chunk_id",
+            "doc_id",
+            "doc_name",
+            "page_number",
+            "section",
+            "org_id",
+            "allowed_roles",
+            "sensitivity_level",
+            "content_type",
+            "source_modality",
+            "caption",
+            "text",
+        ]
+        # Use a filter that matches all rows when org_id is None.
+        # chunk_id is a non-empty VARCHAR primary key by schema invariant.
+        filter_expr = f'org_id == "{org_id}"' if org_id is not None else 'chunk_id != ""'
+
+        page_size = 16384
+        all_rows: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            page: list[dict[str, Any]] = self._client.query(
+                collection_name=self._collection_name,
+                filter=filter_expr,
+                output_fields=output_fields,
+                limit=page_size,
+                offset=offset,
+            )
+            all_rows.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
+
+        chunks: list[Chunk] = [
+            Chunk(
+                chunk_id=row["chunk_id"],
+                doc_id=row["doc_id"],
+                doc_name=row["doc_name"],
+                page_number=row["page_number"],
+                section=row["section"],
+                org_id=row["org_id"],
+                allowed_roles=list(row["allowed_roles"]),
+                sensitivity_level=SensitivityLevel(row["sensitivity_level"]),
+                content_type=ContentType(row["content_type"]),
+                source_modality=row["source_modality"],
+                caption=row["caption"] or None,
+                text=row["text"],
+                embedding=None,
+            )
+            for row in all_rows
+        ]
+
+        logger.info(
+            "vector_store.list_all_chunks_done",
+            collection=self._collection_name,
+            org_id=org_id,
+            chunk_count=len(chunks),
+        )
+        return chunks
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
