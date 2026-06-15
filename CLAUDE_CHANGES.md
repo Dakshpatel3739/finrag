@@ -13,6 +13,15 @@
 ## CHANGELOG
 
 
+### [2026-06-15] fix(web): Map structured QuerySource objects in normalizeSourcesList
+
+- **What:** Updated `normalizeSourcesList` in `web/ui_kits/finrag-app/api.js` to handle the structured `{ doc_name, page_number, chunk_id }` objects now returned by the `/query` endpoint (Phase 3 enrichment). The function previously called `String(s)` on each source, producing `"[object Object]"` for every citation. The fix adds a primary branch that reads object fields directly; the original regex-parse logic is preserved as a fallback for mock fixtures that still use the plain-string shape. `chunkId` is now carried through to the return shape for future SourceCard use (no other component touched).
+- **Why:** `/query` was enriched in the same PR (feat/wire-query-rag-pipeline) to return typed `QuerySource` objects; the frontend normalizer was not updated in lockstep, so all citations rendered as "[object Object]" in the UI.
+- **Files:** `web/ui_kits/finrag-app/api.js`, `CLAUDE_CHANGES.md`.
+- **CI:** web/ is excluded from ruff/mypy — no Python lint to run. No incidents.
+
+---
+
 ### [2026-06-15] fix(config): Rename MILVUS_URI → FINRAG_MILVUS_URI to prevent pymilvus import-time crash
 
 - **What:**
