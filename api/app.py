@@ -48,6 +48,7 @@ from typing import Annotated
 
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
 
@@ -203,6 +204,18 @@ def create_app(*, skip_secret_check: bool = False) -> FastAPI:
         description="Multi-tenant financial RAG with JWT auth and chunk-level RBAC.",
         version="0.3.0",
         lifespan=lifespan,
+    )
+
+    # ── CORS (local dev UI) ───────────────────────────────────────────────────
+    # WHY: the static frontend (web/) is served from a different origin
+    # (localhost:5500) than this API (localhost:8000), so the browser requires
+    # explicit CORS allow-listing. Scoped to known local origins, not "*".
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5500", "http://127.0.0.1:5500"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     # ── Structured logging middleware ─────────────────────────────────────────

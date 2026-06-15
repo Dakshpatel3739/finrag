@@ -12,6 +12,24 @@
 
 ## CHANGELOG
 
+
+### feat(api): CORS middleware for local dev UI
+
+- Added `CORSMiddleware` to `create_app`, allow-listing `localhost:5500` /
+  `127.0.0.1:5500` so the static web UI (different origin) can call the API.
+  Scoped to known local origins, not `*`. Required for browser↔API calls;
+  curl was unaffected, browser preflight was blocked.
+
+No incidents.
+
+### [2026-06-15] API — CORS middleware for local dev UI
+- **What:** Added `CORSMiddleware` to `create_app` in `api/app.py`, allow-listing the static web UI's origins (`http://localhost:5500`, `http://127.0.0.1:5500`) so the browser can call the API (served on `:8000`).
+  - Scoped to known local origins, not `*`. `allow_credentials=True`, all methods/headers allowed.
+  - WHY-comment added inline noting the cross-origin reason (frontend served from a different port than the API).
+- **Why:** The browser blocks cross-origin API calls without explicit CORS allow-listing; curl was unaffected but every browser request (login, ask) was blocked by preflight. Required infrastructure for the UI to function at all.
+- **Files:** `api/app.py`, `CLAUDE_CHANGES.md`.
+- INCIDENT: None.
+
 ### [2026-06-14] Phase 5 burst — retarget to ap-south-1, fit GPU maxSize to 8-vCPU quota
 - **What:** Retargeted all `deploy/` region references and capped the GPU node group to match the granted AWS quota, ahead of the Phase 5 burst.
   - AWS G/VT quota for account 265911026784 was granted as 8 vCPU in ap-south-1 (Mumbai) — partial approval of a 12-vCPU request (support case 17814196790888). 8 vCPU = 2x g5.xlarge.
